@@ -1,6 +1,6 @@
 # FAXE website
 
-A static landing page and `/licenses`, served by Cloudflare Workers Static
+A static landing page, `/licenses`, and `/privacy`, served by Cloudflare Workers Static
 Assets at <https://faxe.oblique.media>. Uses Tailwind CSS, pnpm and Wrangler.
 No runtime application server, analytics, external fonts, or client framework.
 
@@ -21,6 +21,8 @@ Worker configuration with a deployment dry run. It does not deploy.
 The palette in `src/styles.css` matches `src/desktop.rs`. The build copies the
 hero directly from `../assets/screenshot_mac.png` and the app icon from
 `../packaging/icons/32.png`. Edit the landing page in `src/index.html`.
+The privacy policy lives in `src/privacy.html`; keep it aligned with the app's
+local storage, network behavior, and the website's hosting whenever those change.
 
 ## GitHub deployment setup
 

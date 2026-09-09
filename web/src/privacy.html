@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#222831">
+    <title>Privacy policy — FAXE</title>
+    <meta name="description" content="How FAXE handles your data: local document storage, your chosen SIP connection, and no app analytics or automatic uploads to Oblique.">
+    <link rel="canonical" href="https://faxe.oblique.media/privacy">
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <a class="sr-only focus:not-sr-only focus:absolute focus:left-6 focus:top-4 focus:z-10 focus:bg-ink focus:p-3" href="#main">Skip to content</a>
+    <div class="mx-auto max-w-6xl px-6 sm:px-10">
+      <header class="flex items-center justify-between border-b border-paper/15 py-7">
+        <a class="text-2xl font-bold tracking-tight" href="/" aria-label="FAXE home">FAXE<span class="text-teal">.</span></a>
+        <nav class="flex items-center gap-6 text-sm text-paper/75" aria-label="Main">
+          <a class="hover:text-teal" href="/">Home</a>
+          <a class="hover:text-teal" href="/licenses">Licenses</a>
+        </nav>
+      </header>
+
+      <main id="main" class="mx-auto max-w-3xl py-14 sm:py-20">
+        <p class="mb-5 text-xs font-medium uppercase tracking-[0.2em] text-teal">FAXE · Oblique</p>
+        <h1 class="text-4xl font-semibold tracking-tight sm:text-5xl">Privacy policy</h1>
+        <p class="mt-4 text-sm text-paper/60">Effective September 9, 2026</p>
+        <p class="mt-8 text-xl leading-relaxed">FAXE does not send your documents, fax history, SIP credentials, or app usage data to Oblique. We do not operate a cloud fax service or collect app analytics.</p>
+        <p class="mt-5 leading-7 text-paper/75">This policy covers FAXE ( FAX over SIP ), the desktop application published by Oblique, and this website, faxe.oblique.media.</p>
+
+        <div class="mt-10 space-y-9 text-base leading-7 text-paper/75">
+          <section aria-labelledby="app-data">
+            <h2 id="app-data" class="mb-3 text-xl font-semibold text-paper">Data on your device</h2>
+            <p>FAXE processes documents on your computer. To provide its features, it stores connection profiles, saved destinations, settings, fax queues and history, received faxes, and working copies and previews of documents locally. Received PDFs are saved in your selected folder.</p>
+            <p class="mt-3">Saved SIP passwords in the desktop app use your operating system's credential store. Other app data and document files are not encrypted by FAXE itself. Your device's access controls, disk encryption, and backup settings determine their protection.</p>
+            <p class="mt-3">These files can remain after a fax finishes. Clearing the queue does not delete all document copies. To remove all locally stored data, close FAXE and remove its application data, configuration and cache folders, saved fax files, and FAXE entries in your system's credential store. Your own source documents and any backups or synced copies must be managed separately.</p>
+          </section>
+
+          <section aria-labelledby="fax-connection">
+            <h2 id="fax-connection" class="mb-3 text-xl font-semibold text-paper">Your fax connection</h2>
+            <p>When you configure a connection, send a fax, or enable receiving, FAXE communicates with your chosen SIP provider or PBX and the endpoints involved in the call. This involves the account and authentication information needed to connect, phone numbers or SIP addresses, network addresses, call details, and fax contents. These communications do not pass through Oblique's servers.</p>
+            <p class="mt-3">If you configure a STUN server for network discovery, it receives network information such as your public IP address and port. It does not receive your fax documents through that discovery process.</p>
+            <p class="mt-3">Your provider, network operator, and fax recipients handle the information they receive under their own policies. FAXE does not provide end-to-end fax encryption. Files saved in a folder you sync or back up may also be copied by the services you use for that purpose.</p>
+          </section>
+
+          <section aria-labelledby="tracking">
+            <h2 id="tracking" class="mb-3 text-xl font-semibold text-paper">No app tracking or automatic reporting</h2>
+            <p>FAXE has no advertising, usage analytics, tracking SDKs, or automatic crash-report uploads to Oblique. You do not need an Oblique account. We do not sell personal information or use your fax data for advertising.</p>
+            <p class="mt-3">The app can write diagnostic messages to your local console. Detailed logging may include connection or call information; logs are not automatically sent to us. If you choose to share logs, documents, or screenshots for support, we receive what you send.</p>
+          </section>
+
+          <section aria-labelledby="website">
+            <h2 id="website" class="mb-3 text-xl font-semibold text-paper">This website and other services</h2>
+            <p>This website has no advertising or analytics scripts, and its own pages do not set tracking cookies or use browser storage. Cloudflare hosts and delivers the site and may process and retain technical request information, including IP addresses, to provide and protect the service. See <a class="text-teal underline underline-offset-4" href="https://www.cloudflare.com/privacypolicy/">Cloudflare's privacy policy</a>.</p>
+            <p class="mt-3">Opening a website link from FAXE, including its acknowledgments page, makes a normal browser request to that website. App stores, your operating system, and sites such as GitHub may process information under their own privacy policies when you use their services.</p>
+          </section>
+
+          <section aria-labelledby="contact">
+            <h2 id="contact" class="mb-3 text-xl font-semibold text-paper">Questions and support</h2>
+            <p>For privacy questions, contact Oblique through the <a class="text-teal underline underline-offset-4" href="https://github.com/coral/faxe/issues">FAXE project</a>. GitHub issues are public; do not post private documents, passwords, or sensitive logs.</p>
+            <p class="mt-3">If you contact us, we receive the contact details and information you provide and use them to respond to and resolve your request. We cannot access or delete fax files stored on your device or by your provider.</p>
+          </section>
+
+          <section aria-labelledby="changes">
+            <h2 id="changes" class="mb-3 text-xl font-semibold text-paper">Changes to this policy</h2>
+            <p>We will publish any updates on this page and change the effective date above.</p>
+          </section>
+        </div>
+      </main>
+
+      <footer class="flex flex-wrap items-center justify-between gap-4 border-t border-paper/15 py-7 text-xs text-paper/60">
+        <p>FAXE · A desktop fax app, written in Rust.</p>
+        <div class="flex gap-5">
+          <a class="hover:text-teal" href="/">Home</a>
+          <a class="hover:text-teal" href="/licenses">Acknowledgments</a>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

@@ -11,6 +11,7 @@ await mkdir(dist, { recursive: true });
 const assets = [
   ['src/index.html', 'index.html'],
   ['src/404.html', '404.html'],
+  ['src/privacy.html', 'privacy.html'],
   ['public/licenses.html', 'licenses.html'],
   ['public/_headers', '_headers'],
   ['public/robots.txt', 'robots.txt'],
