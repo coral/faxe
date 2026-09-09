@@ -108,8 +108,10 @@ pub struct App {
     preview_image: Option<iced::widget::image::Handle>,
     preview_source: Option<Arc<PreviewSource>>,
     preview_revision: u64,
+    preview_displayed_revision: u64,
     preview_rendering: bool,
     contrast_change: Option<(Instant, u64)>,
+    contrast_apply_pending: bool,
     engine: Option<EngineHandle>,
     snapshot: Arc<EngineView>,
     window: Option<window::Id>,
@@ -246,8 +248,10 @@ impl App {
             preview_image: None,
             preview_source: None,
             preview_revision: 0,
+            preview_displayed_revision: 0,
             preview_rendering: false,
             contrast_change: None,
+            contrast_apply_pending: false,
             engine: None,
             snapshot: Arc::new(EngineView::default()),
             window: None,
@@ -591,7 +595,7 @@ impl App {
                 }
             }
             Message::Binarization(value) => {
-                if self.preparing.is_none() {
+                if self.preparing.is_none() || self.prepared.is_some() {
                     self.options.binarization = value;
                     let preview = self.refresh_preview();
                     let apply = self.update(Message::ApplyContrast);
@@ -599,7 +603,7 @@ impl App {
                 }
             }
             Message::Contrast(value) => {
-                if self.preparing.is_none() {
+                if self.preparing.is_none() || self.prepared.is_some() {
                     self.options.contrast = value.clamp(-100, 100);
                     let preview = self.refresh_preview();
                     self.contrast_change = Some((Instant::now(), self.preview_revision));
@@ -617,6 +621,10 @@ impl App {
             Message::ApplyContrast => {
                 self.contrast_change = None;
                 let settings = self.save_settings();
+                if self.preparing.is_some() && self.prepared.is_some() {
+                    self.contrast_apply_pending = true;
+                    return settings;
+                }
                 if self
                     .prepared
                     .as_ref()
@@ -699,23 +707,33 @@ impl App {
                     return Task::none();
                 }
                 self.preparing = None;
+                let apply_pending = std::mem::take(&mut self.contrast_apply_pending);
                 match result {
                     Ok(document) => {
                         let adjusting = self.prepared.is_some();
                         self.prepared = Some(document);
-                        if adjusting && self.preview_source.is_some() {
+                        let preview = if adjusting && self.preview_source.is_some() {
                             // The cached grayscale page is unchanged by tone edits.
-                            return self.refresh_preview();
-                        }
-                        if !adjusting {
-                            self.preview = 1;
-                        }
-                        return self.load_preview();
+                            self.refresh_preview()
+                        } else {
+                            if !adjusting {
+                                self.preview = 1;
+                            }
+                            self.load_preview()
+                        };
+                        let apply = if apply_pending {
+                            self.update(Message::ApplyContrast)
+                        } else {
+                            Task::none()
+                        };
+                        return Task::batch([preview, apply]);
                     }
                     Err(error) => self.notice = Some(error),
                 }
             }
             Message::CancelPreparation => {
+                self.contrast_apply_pending = false;
+                self.contrast_change = None;
                 if let Some(cancellation) = &self.preparing {
                     cancellation.cancel();
                 }
@@ -743,18 +761,27 @@ impl App {
             }
             Message::TonePreviewLoaded(id, page, revision, result) => {
                 self.preview_rendering = false;
-                if self
+                let current_page = self
                     .prepared
                     .as_ref()
                     .is_some_and(|document| document.id == id)
-                    && self.preview == page
-                    && self.preview_revision == revision
-                {
+                    && self.preview == page;
+                if current_page && revision > self.preview_displayed_revision {
                     match result {
-                        Ok(image) => self.preview_image = Some(image),
-                        Err(error) => self.notice = Some(error),
+                        Ok(image) => {
+                            self.preview_image = Some(image);
+                            self.preview_displayed_revision = revision;
+                        }
+                        Err(error) if revision == self.preview_revision => {
+                            self.notice = Some(error)
+                        }
+                        Err(_) => (),
                     }
-                } else {
+                }
+                // Show each newer completed frame while coalescing to the latest
+                // setting. Requiring an exact revision would starve Photo previews
+                // when slider events arrive faster than a frame can be rendered.
+                if !current_page || revision != self.preview_revision {
                     return self.render_preview();
                 }
             }
@@ -1026,6 +1053,7 @@ impl App {
         self.preview_image = None;
         self.preview_source = None;
         self.preview_revision += 1;
+        self.preview_displayed_revision = self.preview_revision;
         if let (Some(engine), Some(document)) = (self.engine.clone(), self.prepared.as_ref()) {
             let id = document.id;
             let page = self.preview;
@@ -1050,7 +1078,9 @@ impl App {
         self.preview_source = None;
         self.preview_image = None;
         self.preview_revision += 1;
+        self.preview_displayed_revision = self.preview_revision;
         self.contrast_change = None;
+        self.contrast_apply_pending = false;
     }
 
     fn refresh_preview(&mut self) -> Task<Message> {
@@ -1181,6 +1211,16 @@ mod preview_tests {
         ));
         assert!(app.preview_image.is_none());
         assert!(!app.preview_rendering);
+        // A completed intermediate frame must appear during continuous dragging,
+        // even when a more recent setting is already waiting to be rendered.
+        let _ = app.update(Message::TonePreviewLoaded(
+            id,
+            1,
+            revision,
+            Ok(image.clone()),
+        ));
+        assert!(app.preview_image.is_some());
+        assert_eq!(app.preview_displayed_revision, revision);
         let _ = app.update(Message::TonePreviewLoaded(
             id,
             1,
@@ -1188,6 +1228,13 @@ mod preview_tests {
             Ok(image.clone()),
         ));
         assert!(app.preview_image.is_some());
+        let _ = app.update(Message::TonePreviewLoaded(
+            id,
+            1,
+            revision,
+            Ok(image.clone()),
+        ));
+        assert_eq!(app.preview_displayed_revision, app.preview_revision);
         app.preview = 2;
         app.preview_image = None;
         let _ = app.update(Message::TonePreviewLoaded(
@@ -1197,6 +1244,15 @@ mod preview_tests {
             Ok(image),
         ));
         assert!(app.preview_image.is_none());
+        app.preparing = Some(Cancellation::default());
+        let _ = app.update(Message::Contrast(0));
+        assert_eq!(app.options.contrast, 0);
+        // Returning to the old setting while another setting is being saved
+        // must still apply the latest value after that save finishes.
+        let _ = app.update(Message::ApplyContrast);
+        assert!(app.contrast_apply_pending);
+        let _ = app.update(Message::CancelPreparation);
+        assert!(!app.contrast_apply_pending);
         app.invalidate_document();
         assert!(app.prepared.is_none() && app.contrast_change.is_none());
     }
