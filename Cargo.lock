@@ -1324,7 +1324,7 @@ checksum = "caf1079563223d5d59d83c85886a56e586cfd5c1a26292e971a0fa266531ac5a"
 
 [[package]]
 name = "faxe-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "clap",
  "faxe-engine",
@@ -1335,7 +1335,7 @@ dependencies = [
 
 [[package]]
 name = "faxe-desktop"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "faxe-engine",
  "iced",
@@ -1352,7 +1352,7 @@ dependencies = [
 
 [[package]]
 name = "faxe-engine"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "chrono",
  "crossbeam-channel",
@@ -1379,7 +1379,7 @@ dependencies = [
 
 [[package]]
 name = "faxe-native"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "crossbeam-channel",
  "faxe-pj-sys",
@@ -1396,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "faxe-pj-sys"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bindgen 0.73.1",
  "cc",
