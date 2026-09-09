@@ -1,0 +1,291 @@
+name: Build and package
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUSTUP_TOOLCHAIN: stable
+
+jobs:
+  release-version:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Test release asset publication
+        run: python3 scripts/ci/test-release.py
+      - name: Check generated license inventory
+        run: python3 scripts/generate-licenses.py --check-page
+      - name: Check tag matches workspace version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 scripts/ci/check-release.py
+
+  macos:
+    needs: release-version
+    name: macOS arm64
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_TARGET: aarch64-apple-darwin
+      PACKAGE_ARCH: arm64
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Install Rust stable
+        run: rustup toolchain install stable --profile minimal --target "$CARGO_BUILD_TARGET"
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          key: aarch64-apple-darwin
+          cache-on-failure: true
+      - name: Install macOS dependencies
+        shell: bash
+        run: |
+          brew install cmake ninja pkgconf libtiff jpeg-turbo llvm
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+          echo 'MACOSX_DEPLOYMENT_TARGET=15.0' >> "$GITHUB_ENV"
+          echo 'CMAKE_OSX_DEPLOYMENT_TARGET=15.0' >> "$GITHUB_ENV"
+      - name: Compile workspace
+        run: cargo build --workspace --release --locked
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --version 0.11.0 --locked
+      - name: Package macOS
+        run: bash scripts/ci/package-macos.sh
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: faxe-macos-unsigned
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  sign-macos:
+    name: Sign and notarize macOS
+    needs: macos
+    if: github.repository == 'coral/faxe' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')) && github.event_name != 'pull_request'
+    runs-on: macos-15
+    environment: release
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: faxe-macos-unsigned
+          path: unsigned
+      - name: Sign and notarize
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: bash scripts/ci/sign-macos.sh
+      - name: Remove signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/faxe-signing/signing.keychain-db" 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/faxe-signing"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: faxe-aarch64-apple-darwin
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  desktop:
+    needs: release-version
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-24.04
+            platform: linux
+            target: x86_64-unknown-linux-gnu
+            arch: x86_64
+          - name: Linux arm64
+            runner: ubuntu-24.04-arm
+            platform: linux
+            target: aarch64-unknown-linux-gnu
+            arch: aarch64
+          - name: Windows x64
+            runner: windows-2025
+            platform: windows
+            target: x86_64-pc-windows-msvc
+            arch: x64
+          - name: Windows arm64
+            runner: windows-11-arm
+            platform: windows
+            target: aarch64-pc-windows-msvc
+            arch: arm64
+    env:
+      CARGO_BUILD_TARGET: ${{ matrix.target }}
+      PACKAGE_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Install Rust stable
+        shell: bash
+        run: rustup toolchain install stable --profile minimal --target "$CARGO_BUILD_TARGET"
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          key: ${{ matrix.target }}
+          cache-on-failure: true
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config clang libclang-dev \
+            libtiff-dev libjpeg-dev libgtk-3-dev libayatana-appindicator3-dev \
+            libxkbcommon-dev libwayland-dev libudev-dev libssl-dev uuid-dev \
+            squashfs-tools patchelf file
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/setup-windows.ps1
+      - name: Compile workspace
+        run: cargo build --workspace --release --locked
+      - name: Install cargo-bundle
+        if: runner.os != 'Windows'
+        run: cargo install cargo-bundle --version 0.11.0 --locked
+      - name: Package Linux AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/ci/package-linux.sh
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          FAXE_STORE_IDENTITY: ${{ vars.FAXE_STORE_IDENTITY }}
+          FAXE_STORE_PUBLISHER: ${{ vars.FAXE_STORE_PUBLISHER }}
+          FAXE_STORE_DISPLAY_NAME: ${{ vars.FAXE_STORE_DISPLAY_NAME }}
+        run: ./scripts/ci/package-windows.ps1
+      - name: Upload packages
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: faxe-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  flatpak:
+    needs: release-version
+    name: Flatpak ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Install build tools and SDK
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive flathub org.gnome.Platform//50 org.gnome.Sdk//50
+          flatpak install --user --noninteractive flathub \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08 \
+            org.freedesktop.Sdk.Extension.llvm21//25.08
+      - name: Prepare sources
+        shell: bash
+        run: |
+          cargo vendor --locked --versioned-dirs .flatpak-vendor > .flatpak-cargo-config.toml
+          git clone https://github.com/flathub/shared-modules.git packaging/flatpak/shared-modules
+          git -C packaging/flatpak/shared-modules checkout cb9ec602a1ece1c76d5a4f8aa1d87c4a6bf99c3e
+      - name: Build and package Flatpak
+        shell: bash
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          flatpak-builder --user --force-clean --disable-rofiles-fuse --arch="$PACKAGE_ARCH" \
+            --repo=packaging/flatpak/repo packaging/flatpak/build \
+            packaging/flatpak/com.coral.faxe.json
+          mkdir -p dist
+          flatpak build-bundle --arch="$PACKAGE_ARCH" --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
+            packaging/flatpak/repo "dist/FAXE-linux-$PACKAGE_ARCH.flatpak" com.coral.faxe
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: faxe-flatpak-${{ matrix.arch }}
+          path: dist/*.flatpak
+          if-no-files-found: error
+          retention-days: 14
+
+  source:
+    needs: release-version
+    name: Corresponding source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Archive source and dependencies
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          mkdir -p dist/source/.cargo
+          git ls-files --recurse-submodules -z | tar --null -T - -cf - | tar -xf - -C dist/source
+          cargo vendor --locked --versioned-dirs dist/source/vendor > dist/source/.cargo/config.toml
+          sed -i 's|directory = "dist/source/vendor"|directory = "vendor"|' dist/source/.cargo/config.toml
+          git rev-parse HEAD > dist/source/REVISION
+          tar -C dist -czf dist/faxe-source.tar.gz source
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: faxe-source
+          path: dist/faxe-source.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub release
+    needs: [sign-macos, desktop, flatpak, source]
+    if: github.repository == 'coral/faxe' && startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          pattern: faxe-*
+          path: artifacts
+      - name: Validate and publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/ci/publish-release.sh

@@ -1,0 +1,3 @@
+[submodule "crates/faxe-pj-sys/pjproject"]
+	path = crates/faxe-pj-sys/pjproject
+	url = https://github.com/pjsip/pjproject.git

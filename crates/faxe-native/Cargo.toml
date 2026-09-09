@@ -1,0 +1,20 @@
+[package]
+name = "faxe-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+crossbeam-channel = "0.5.15"
+faxe-pj-sys = { path = "../faxe-pj-sys" }
+spandsp = { version = "0.2.3", default-features = false, features = ["fax"] }
+udptl = "0.2.0"
+rustls = { version = "0.23.44", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8.4"
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+rcgen = "0.14.10"

@@ -1,0 +1,52 @@
+# Package targets implemented by .github/workflows/build.yml.
+# Signing identities, Store identity and release URLs remain configurable/deferred.
+
+[macos_arm64]
+host = "macOS arm64"
+target = "aarch64-apple-darwin"
+minimum_os = "15.0"
+format = "app"
+tool = "cargo-bundle"
+cargo_config = "packaging/macos/cargo.toml"
+
+[windows_x64]
+host = "Windows"
+target = "x86_64-pc-windows-msvc"
+package_architecture = "x64"
+format = "msix"
+tool = "Windows SDK MakeAppx"
+manifest = "packaging/windows/AppxManifest.xml.in"
+
+[windows_arm64]
+host = "Windows"
+target = "aarch64-pc-windows-msvc"
+package_architecture = "arm64"
+format = "msix"
+tool = "Windows SDK MakeAppx"
+manifest = "packaging/windows/AppxManifest.xml.in"
+
+[appimage_x64]
+host = "Linux x86_64"
+target = "x86_64-unknown-linux-gnu"
+package_architecture = "x86_64"
+format = "appimage"
+tool = "cargo-bundle"
+
+[appimage_arm64]
+host = "Linux aarch64"
+target = "aarch64-unknown-linux-gnu"
+package_architecture = "aarch64"
+format = "appimage"
+tool = "cargo-bundle"
+
+[flatpak_x64]
+host = "Linux x86_64"
+package_architecture = "x86_64"
+tool = "flatpak-builder"
+manifest = "packaging/flatpak/com.coral.faxe.json"
+
+[flatpak_arm64]
+host = "Linux aarch64"
+package_architecture = "aarch64"
+tool = "flatpak-builder"
+manifest = "packaging/flatpak/com.coral.faxe.json"

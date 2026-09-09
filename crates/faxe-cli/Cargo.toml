@@ -1,0 +1,12 @@
+[package]
+name = "faxe-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+faxe-engine = { path = "../faxe-engine" }
+clap = { version = "4.6.6", features = ["derive"] }
+tokio.workspace = true
+serde_json.workspace = true
+tracing-subscriber.workspace = true

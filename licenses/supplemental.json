@@ -1,0 +1,666 @@
+[
+  {
+    "used_by": [
+      "block2@0.5.1",
+      "objc-sys@0.3.5",
+      "objc2@0.5.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/4fc083f1c6d6784577e38b0ee8dbd344481e2fd2/LICENSE.txt",
+    "path": "licenses/supplemental/madsmtm-objc2-4fc083f1c6d6-LICENSE.txt",
+    "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5"
+  },
+  {
+    "used_by": [
+      "chrono@0.4.45"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/chronotope/chrono/170338250e836976a211e64728ec956e45e78a39/LICENSE.txt",
+    "path": "licenses/supplemental/chronotope-chrono-170338250e83-LICENSE.txt",
+    "sha256": "946c9835d8034d24404f8cfec5f4654cee5dad17e944afc3d06d742cf2882831"
+  },
+  {
+    "used_by": [
+      "iced_core@0.14.0",
+      "iced_debug@0.14.0",
+      "iced_futures@0.14.0",
+      "iced_graphics@0.14.0",
+      "iced_program@0.14.0",
+      "iced_renderer@0.14.0",
+      "iced_runtime@0.14.0",
+      "iced_wgpu@0.14.0",
+      "iced_winit@0.14.0"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/iced-rs/iced/3997291f318a8bc06fa522f5579836fb3feb94df/LICENSE",
+    "path": "licenses/supplemental/iced-rs-iced-3997291f318a-LICENSE",
+    "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398"
+  },
+  {
+    "used_by": [
+      "iced_tiny_skia@0.14.1"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/iced-rs/iced/0ecf60664df7b8ac7d7aef5f7279d5323027f693/LICENSE",
+    "path": "licenses/supplemental/iced-rs-iced-0ecf60664df7-LICENSE",
+    "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398"
+  },
+  {
+    "used_by": [
+      "iced_widget@0.14.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/iced-rs/iced/54abf81d13fec06d4d9ac754b03ce2c3313e8a1f/LICENSE",
+    "path": "licenses/supplemental/iced-rs-iced-54abf81d13fe-LICENSE",
+    "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398"
+  },
+  {
+    "used_by": [
+      "libappindicator-sys@0.9.0"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/tauri-apps/libappindicator-rs/eafd1e3682a1247f595410266091e9684021cb6f/LICENSE-MIT",
+    "path": "licenses/supplemental/tauri-apps-libappindicator-rs-eafd1e3682a1-LICENSE-MIT",
+    "sha256": "eb227437252b2a7a9c1fc342c93ade1f3d7ce38cc6dd754f613db07d53ceff0b"
+  },
+  {
+    "used_by": [
+      "libm@0.2.16"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/rust-lang/compiler-builtins/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/LICENSE.txt",
+    "path": "licenses/supplemental/rust-lang-compiler-builtins-dfd2203a4d61-libm-LICENSE.txt",
+    "sha256": "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"
+  },
+  {
+    "used_by": [
+      "mac-notification-sys@0.6.15"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/h4llow3En/mac-notification-sys/deb559683962d314a7693478476bf8d052efa84e/LICENSE-MIT",
+    "path": "licenses/supplemental/h4llow3En-mac-notification-sys-deb559683962-LICENSE-MIT",
+    "sha256": "1299b4d9d15e9d67e4ac0e7d47ae9404887ca3cf0764aadeec7588d5a6e8e0cc"
+  },
+  {
+    "used_by": [
+      "objc2-app-kit@0.2.2",
+      "objc2-foundation@0.2.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/e282618be4c3a3b9542957e0c8540e9588472ce8/LICENSE.txt",
+    "path": "licenses/supplemental/madsmtm-objc2-e282618be4c3-LICENSE.txt",
+    "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5"
+  },
+  {
+    "used_by": [
+      "profiling@1.0.18"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+    "path": "licenses/supplemental/aclysma-profiling-8271551172eb-LICENSE-MIT",
+    "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
+  },
+  {
+    "used_by": [
+      "svg_fmt@0.4.5"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/nical/rust_debug/93f414cd572b5c2781df93dbdc068ed13443d05a/LICENSE",
+    "path": "licenses/supplemental/nical-rust_debug-93f414cd572b-LICENSE",
+    "sha256": "7e98bed7f100747aaae7d82ab94fbe6b76fd6b84b09a3aaa413bff8196d0fbb1"
+  },
+  {
+    "used_by": [
+      "dpi@0.1.2"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/dpi/0.1.2/source/LICENSE-LIBM-MIT",
+    "path": "licenses/supplemental/dpi@0.1.2.txt",
+    "sha256": "9eff396a99bafd208e7126602420d6864f6066c08b84485a5b032320a9c01997"
+  },
+  {
+    "used_by": [
+      "tauri-winrt-notification@0.7.3"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/tauri-winrt-notification/0.7.3/source/LICENSE_MIT",
+    "path": "licenses/supplemental/tauri-winrt-notification@0.7.3.txt",
+    "sha256": "9dd42ea92cff2ede5cd477cbfcce051b2d0115c0ac7f368ee88cb545055dff1d"
+  },
+  {
+    "used_by": [
+      "windows-collections@0.2.0"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-collections/0.2.0/source/license-mit",
+    "path": "licenses/supplemental/windows-collections@0.2.0.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-collections@0.3.2"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-collections/0.3.2/source/license-mit",
+    "path": "licenses/supplemental/windows-collections@0.3.2.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-core@0.58.0"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-core/0.58.0/source/license-mit",
+    "path": "licenses/supplemental/windows-core@0.58.0.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-core@0.61.2"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-core/0.61.2/source/license-mit",
+    "path": "licenses/supplemental/windows-core@0.61.2.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-core@0.62.2"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-core/0.62.2/source/license-mit",
+    "path": "licenses/supplemental/windows-core@0.62.2.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-future@0.2.1"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-future/0.2.1/source/license-mit",
+    "path": "licenses/supplemental/windows-future@0.2.1.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-future@0.3.2"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-future/0.3.2/source/license-mit",
+    "path": "licenses/supplemental/windows-future@0.3.2.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-implement@0.58.0"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-implement/0.58.0/source/license-mit",
+    "path": "licenses/supplemental/windows-implement@0.58.0.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-implement@0.60.2"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-implement/0.60.2/source/license-mit",
+    "path": "licenses/supplemental/windows-implement@0.60.2.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-interface@0.58.0"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-interface/0.58.0/source/license-mit",
+    "path": "licenses/supplemental/windows-interface@0.58.0.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-interface@0.59.3"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-interface/0.59.3/source/license-mit",
+    "path": "licenses/supplemental/windows-interface@0.59.3.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-link@0.1.3"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-link/0.1.3/source/license-mit",
+    "path": "licenses/supplemental/windows-link@0.1.3.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-link@0.2.1"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-link/0.2.1/source/license-mit",
+    "path": "licenses/supplemental/windows-link@0.2.1.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-numerics@0.2.0"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-numerics/0.2.0/source/license-mit",
+    "path": "licenses/supplemental/windows-numerics@0.2.0.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-numerics@0.3.1"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-numerics/0.3.1/source/license-mit",
+    "path": "licenses/supplemental/windows-numerics@0.3.1.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-result@0.2.0"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-result/0.2.0/source/license-mit",
+    "path": "licenses/supplemental/windows-result@0.2.0.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-result@0.3.4"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-result/0.3.4/source/license-mit",
+    "path": "licenses/supplemental/windows-result@0.3.4.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-result@0.4.1"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-result/0.4.1/source/license-mit",
+    "path": "licenses/supplemental/windows-result@0.4.1.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-strings@0.1.0"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-strings/0.1.0/source/license-mit",
+    "path": "licenses/supplemental/windows-strings@0.1.0.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-strings@0.4.2"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-strings/0.4.2/source/license-mit",
+    "path": "licenses/supplemental/windows-strings@0.4.2.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-strings@0.5.1"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-strings/0.5.1/source/license-mit",
+    "path": "licenses/supplemental/windows-strings@0.5.1.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-sys@0.52.0"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-sys/0.52.0/source/license-mit",
+    "path": "licenses/supplemental/windows-sys@0.52.0.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-sys@0.59.0"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-sys/0.59.0/source/license-mit",
+    "path": "licenses/supplemental/windows-sys@0.59.0.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-sys@0.61.2"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-sys/0.61.2/source/license-mit",
+    "path": "licenses/supplemental/windows-sys@0.61.2.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-targets@0.52.6"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-targets/0.52.6/source/license-mit",
+    "path": "licenses/supplemental/windows-targets@0.52.6.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-threading@0.1.0"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-threading/0.1.0/source/license-mit",
+    "path": "licenses/supplemental/windows-threading@0.1.0.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-threading@0.2.1"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-threading/0.2.1/source/license-mit",
+    "path": "licenses/supplemental/windows-threading@0.2.1.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows-version@0.1.7"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows-version/0.1.7/source/license-mit",
+    "path": "licenses/supplemental/windows-version@0.1.7.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows@0.58.0"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows/0.58.0/source/license-mit",
+    "path": "licenses/supplemental/windows@0.58.0.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows@0.61.3"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows/0.61.3/source/license-mit",
+    "path": "licenses/supplemental/windows@0.61.3.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows@0.62.2"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows/0.62.2/source/license-mit",
+    "path": "licenses/supplemental/windows@0.62.2.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows_aarch64_msvc@0.52.6"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows_aarch64_msvc/0.52.6/source/license-mit",
+    "path": "licenses/supplemental/windows_aarch64_msvc@0.52.6.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows_x86_64_gnu@0.52.6"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows_x86_64_gnu/0.52.6/source/license-mit",
+    "path": "licenses/supplemental/windows_x86_64_gnu@0.52.6.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "windows_x86_64_msvc@0.52.6"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/windows_x86_64_msvc/0.52.6/source/license-mit",
+    "path": "licenses/supplemental/windows_x86_64_msvc@0.52.6.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  {
+    "used_by": [
+      "block2@0.6.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/b4167b582b2f75f9a1be75495c41b765344fd03c/LICENSE.md",
+    "path": "licenses/supplemental/block2@0.6.2.txt",
+    "sha256": "5fcb9cb101e3287c4ce8286680e1fb24f3d7e0226bcbdbe4cf1a1e5e4a1dd422",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "block@0.1.6"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/block/0.1.6/source/Cargo.toml",
+    "path": "licenses/supplemental/block@0.1.6.txt",
+    "sha256": "897a279bc80d3695f8ca50a9f3edd74fc19b9d2820edb1373b35f720ea5e9a90",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "dispatch2@0.3.1"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md",
+    "path": "licenses/supplemental/dispatch2@0.3.1.txt",
+    "sha256": "94b875e26b375631faf05b2e97c7d9780f2a317256a20376d82233054bcb71ad",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "dispatch@0.2.0"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/dispatch/0.2.0/source/Cargo.toml",
+    "path": "licenses/supplemental/dispatch@0.2.0.txt",
+    "sha256": "0c16ce35307bf00764a27853e25079cf03378cbd2ee4d9d1026aee1707479f33",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "gpu-alloc-types@0.3.1"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/zakarumych/gpu-alloc/7ddd1fe576fcfc503347eb97e476a47581479f22/COPYING",
+    "path": "licenses/supplemental/gpu-alloc-types@0.3.1.txt",
+    "sha256": "20fe077b8053ae627377eefdfbee7aa2a0d0dc095dc5b1a670118659a7f51e91",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "gpu-alloc@0.6.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/zakarumych/gpu-alloc/61020bdcb4eb04fca6bbf748aeb9570e859236e0/COPYING",
+    "path": "licenses/supplemental/gpu-alloc@0.6.2.txt",
+    "sha256": "fb9e59d36e370e8f1524931ed300f2058b8fb199516a57d877c72c76ecc94ecd",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "gpu-descriptor-types@0.2.0"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/zakarumych/gpu-descriptor/9f2fb9546591322e7b77ee1e79385e01effd85e4/COPYING",
+    "path": "licenses/supplemental/gpu-descriptor-types@0.2.0.txt",
+    "sha256": "63a8e6c19d6ba330dbf0c004919456edead512d4d9755cc18f57cba1794cb485",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "gpu-descriptor@0.3.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/zakarumych/gpu-descriptor/bb28b4e55b742e0ea3e7a0968e7ee6287ba0e06a/COPYING",
+    "path": "licenses/supplemental/gpu-descriptor@0.3.2.txt",
+    "sha256": "8982eb66457a7e3c1f744d20e5df11ae791fdc911eecfd3f61295984a31450f7",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "malloc_buf@0.0.6"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/malloc_buf/0.0.6/source/Cargo.toml",
+    "path": "licenses/supplemental/malloc_buf@0.0.6.txt",
+    "sha256": "345e09ff540abe2b075ff26d7d629ac7aba0fce747c01c37f16cbc5ca2d88edd",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "objc2-app-kit@0.3.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+    "path": "licenses/supplemental/objc2-app-kit@0.3.2.txt",
+    "sha256": "1804860a2c89aa717b4844a4fce000ec23ac9d5beb98a9ea5f060c034946a31e",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "objc2-cloud-kit@0.3.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+    "path": "licenses/supplemental/objc2-cloud-kit@0.3.2.txt",
+    "sha256": "c7a50657defc8308f6ef2ecfc92a6f0d122b600d7ca703bfc468a26c90abcf2e",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "objc2-core-data@0.3.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+    "path": "licenses/supplemental/objc2-core-data@0.3.2.txt",
+    "sha256": "2c46e0f79fe240d9702aa79567c3bc286404015d3363c4ee6840be0a399d7076",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "objc2-core-foundation@0.3.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+    "path": "licenses/supplemental/objc2-core-foundation@0.3.2.txt",
+    "sha256": "ec408c66de06df9137759afcaa09bbbcaebb44acad03365ff39439b50fe94a7c",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "objc2-core-graphics@0.3.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+    "path": "licenses/supplemental/objc2-core-graphics@0.3.2.txt",
+    "sha256": "a866aa180127ea5473413a74de4c745da6fbd334c7900184aae9cd7b2c9e5135",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "objc2-core-image@0.3.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+    "path": "licenses/supplemental/objc2-core-image@0.3.2.txt",
+    "sha256": "b82e13911531b86c4b2fc4c2e372ba11343024d50e25c9e59c7179c48cc7cf28",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "objc2-core-text@0.3.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+    "path": "licenses/supplemental/objc2-core-text@0.3.2.txt",
+    "sha256": "121350c7e1a83185ce86334419990595139c2398b61458c99ff31d1e8d961a9e",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "objc2-core-video@0.3.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+    "path": "licenses/supplemental/objc2-core-video@0.3.2.txt",
+    "sha256": "25a077aef28f7d7253d7f1f5a1f133bb46862efde83fb5b321f313462f13e63b",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "objc2-encode@4.1.0"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md",
+    "path": "licenses/supplemental/objc2-encode@4.1.0.txt",
+    "sha256": "2c20b0325eaa3bf892813cd7be04ffed7cf4e6104110b6e14642bc410c3df054",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "objc2-foundation@0.3.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+    "path": "licenses/supplemental/objc2-foundation@0.3.2.txt",
+    "sha256": "07ab07d1d2d288241bbbdb82682afc34a337ea5bc5f858206b9fbee8a2c08ede",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "objc2-quartz-core@0.3.2"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+    "path": "licenses/supplemental/objc2-quartz-core@0.3.2.txt",
+    "sha256": "ec71d3c6183d0c50c10aed435ded5b9f3061f3a35363eff8e9d9628bb571f2d0",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "objc2@0.6.4"
+    ],
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md",
+    "path": "licenses/supplemental/objc2@0.6.4.txt",
+    "sha256": "cee02882f84b135d381c02c19bbd3b7beebce53cd380561d724df931ca794cbc",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "pdfium-render@0.9.4"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/pdfium-render/0.9.4/source/Cargo.toml",
+    "path": "licenses/supplemental/pdfium-render@0.9.4.txt",
+    "sha256": "3db9ac23601052a2be24299ce57e62370a22302a7edca3c3ee73b02382b3c2bf",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  },
+  {
+    "used_by": [
+      "udptl@0.2.0"
+    ],
+    "license": "MIT",
+    "source": "https://docs.rs/crate/udptl/0.2.0/source/Cargo.toml",
+    "path": "licenses/supplemental/udptl@0.2.0.txt",
+    "sha256": "73809582dc7fb21e7b3849e6bff1d0db32a004bc6a9a820afe9c987bd0823277",
+    "basis": "Upstream license declaration and published package author metadata, followed by the referenced MIT terms. No copyright holder or year was inferred."
+  }
+]

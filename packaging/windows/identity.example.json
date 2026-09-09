@@ -1,0 +1,5 @@
+{
+  "identity_name": "@PARTNER_CENTER_PACKAGE_IDENTITY_NAME@",
+  "identity_publisher": "@PARTNER_CENTER_PACKAGE_IDENTITY_PUBLISHER@",
+  "publisher_display_name": "@PUBLISHER_DISPLAY_NAME@"
+}

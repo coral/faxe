@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.coral.faxe</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <name>FAXE</name>
+  <summary>Send and receive faxes over SIP</summary>
+  <description>
+    <p>FAXE sends documents through SIP profiles using T.38 or G.711 and saves received faxes as PDFs.</p>
+    <p>Manage outgoing faxes, review your inbox, and recover readable content from interrupted receptions.</p>
+  </description>
+  <launchable type="desktop-id">com.coral.faxe.desktop</launchable>
+  <provides><binary>faxe</binary></provides>
+  <url type="homepage">@PROJECT_HOMEPAGE@</url>
+  <releases><release version="@VERSION@" date="@RELEASE_DATE@"/></releases>
+</component>

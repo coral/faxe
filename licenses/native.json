@@ -1,0 +1,186 @@
+[
+  {
+    "name": "PJPROJECT",
+    "version": "2.17",
+    "license": "GPL-2.0-or-later",
+    "source": "https://docs.pjsip.org/en/2.17/overview/license_pjsip.html",
+    "notes": "Used under GPLv3 in FAXE. The upstream COPYING file reproduces GPLv2; source headers explicitly permit later versions. Copyright belongs to the upstream contributors.",
+    "files": [
+      {
+        "path": "licenses/native/pjproject/COPYING",
+        "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+      },
+      {
+        "path": "licenses/native/pjproject/sip_endpoint.c.notice",
+        "sha256": "f7a15cb05160bd006d4d21cf2b906f76f24f1a98fcd50493c36c3c13cf58ca4a"
+      }
+    ],
+    "revision": "5a457451fa2712ba18e12b01738e8ff3af2b26fd"
+  },
+  {
+    "name": "SpanDSP C library",
+    "version": "vendored by spandsp-sys 0.2.3",
+    "license": "LGPL-2.1-only",
+    "source": "https://github.com/coral/spandsp-rs",
+    "notes": "FAXE enables fax only. The v150 feature and its GPLv2-only modem-relay modules are excluded. Upstream COPYING also documents GPLv2 for separate tests and supporting tools; that is not the license of the linked fax library.",
+    "files": [
+      {
+        "path": "licenses/native/spandsp/COPYING",
+        "sha256": "366576cb0b869cd9e95a4882878607314650488ac635e5df0692180382e9666a"
+      },
+      {
+        "path": "licenses/native/spandsp/fax.c.notice",
+        "sha256": "c1851062cda719bab7e5cb4ef49d8598b6ad9cde9ca407df6e31d37128adc966"
+      }
+    ]
+  },
+  {
+    "name": "PDFium and bundled components",
+    "version": "chromium/8044",
+    "license": "BSD-3-Clause and component licenses",
+    "source": "https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium/8044",
+    "notes": "Includes all license files shipped with the checksum-verified mac-arm64 artifact. The archive packaging license does not replace PDFium or its component licenses. Review additional platform artifacts when preparing releases.",
+    "files": [
+      {
+        "path": "licenses/native/pdfium/LICENSE",
+        "sha256": "ba26c1263131696b86c10496b5066b918a20b7161822a80c274d0080105f6c93"
+      },
+      {
+        "path": "licenses/native/pdfium/abseil.txt",
+        "sha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747"
+      },
+      {
+        "path": "licenses/native/pdfium/agg23.txt",
+        "sha256": "c110d3ea2ad77467ce0dcff7d3337e6c8be8049a5103f4b9bd5fd911a77972e5"
+      },
+      {
+        "path": "licenses/native/pdfium/fast_float.txt",
+        "sha256": "e562f3f974ced7e69dd1db77b820b36bcf8f30377f1aa105723fba449c53c4e6"
+      },
+      {
+        "path": "licenses/native/pdfium/freetype.txt",
+        "sha256": "f4b133e25df1f86ad3ffea453aa0e613f0474f34778dbbb3e437e7b2724937d8",
+        "encoding": "latin-1"
+      },
+      {
+        "path": "licenses/native/pdfium/icu.txt",
+        "sha256": "e55522d81edc687a341a4411e0776e54ca654e90147f354a90458aaced4116af"
+      },
+      {
+        "path": "licenses/native/pdfium/lcms.txt",
+        "sha256": "7312b68c5b25e9bf2b828706fb4e29588f22705112f411fd42e1f7d84c3d139a"
+      },
+      {
+        "path": "licenses/native/pdfium/libjpeg_turbo.ijg",
+        "sha256": "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
+      },
+      {
+        "path": "licenses/native/pdfium/libjpeg_turbo.md",
+        "sha256": "96f5b328adbb78eeaaec6980d73fd558cb1e4d62560ed615646bc3cf5e532430"
+      },
+      {
+        "path": "licenses/native/pdfium/libopenjpeg.txt",
+        "sha256": "c5ab0890a737c2dfa7ba675036554f6d17741d98629b0c2a145354d00617e6b2"
+      },
+      {
+        "path": "licenses/native/pdfium/libpng.txt",
+        "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526"
+      },
+      {
+        "path": "licenses/native/pdfium/llvm-libc.txt",
+        "sha256": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47"
+      },
+      {
+        "path": "licenses/native/pdfium/pdfium.txt",
+        "sha256": "1fe9dea718fbd75cf149adaf4d8a22a4335604d964ddb76d1b45383dec8668c9"
+      },
+      {
+        "path": "licenses/native/pdfium/simdutf.txt",
+        "sha256": "fc8dbc04e03ad4efc08a647ffe7f995b811a95bc04c0e85a56d5277c6593fa5f"
+      },
+      {
+        "path": "licenses/native/pdfium/zlib.txt",
+        "sha256": "33fd641c9f3b0e0be64bc78fea9e94807674cdd70c48477599226cb8956565fe"
+      }
+    ],
+    "display_note": "PDFium and its bundled components retain their respective licenses."
+  },
+  {
+    "name": "LibTIFF",
+    "version": "4.7.2",
+    "license": "libtiff and component notices",
+    "source": "https://libtiff.gitlab.io/libtiff/",
+    "notes": "Native TIFF dependency. Preserve notices for the actual library version distributed.",
+    "files": [
+      {
+        "path": "licenses/native/libtiff/LICENSE.md",
+        "sha256": "0e27c2382d7b8147972bbb746e04059a1152c8d0fda9d03ef1399d1a433c4ade"
+      }
+    ],
+    "display_note": "LibTIFF also includes code covered by the component notices below."
+  },
+  {
+    "name": "libjpeg-turbo",
+    "version": "3.2.0",
+    "license": "IJG AND BSD-3-Clause and component notices",
+    "source": "https://libjpeg-turbo.org/",
+    "notes": "This software is based in part on the work of the Independent JPEG Group.",
+    "files": [
+      {
+        "path": "licenses/native/libjpeg-turbo/LICENSE.md",
+        "sha256": "ba6bceebcba0fdd35488477c2cca8c4632ce82c74dbfbc87d886ce6fc4433579"
+      },
+      {
+        "path": "licenses/native/libjpeg-turbo/README.ijg",
+        "sha256": "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
+      }
+    ]
+  },
+  {
+    "name": "libwebp",
+    "version": "1.6.0",
+    "license": "BSD-3-Clause",
+    "source": "https://chromium.googlesource.com/webm/libwebp/",
+    "notes": "Dependency of the current native LibTIFF build.",
+    "files": [
+      {
+        "path": "licenses/native/libwebp/COPYING",
+        "sha256": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf"
+      },
+      {
+        "path": "licenses/native/libwebp/AUTHORS",
+        "sha256": "f251be89fd442bd9d701360730aea163cc8e2076ff03528f59267dc2c4f8b60a"
+      }
+    ]
+  },
+  {
+    "name": "Zstandard",
+    "version": "1.5.7",
+    "license": "BSD-3-Clause",
+    "source": "https://github.com/facebook/zstd",
+    "notes": "Dependency of the current native LibTIFF build; the BSD license option is used.",
+    "files": [
+      {
+        "path": "licenses/native/zstd/LICENSE",
+        "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+      }
+    ]
+  },
+  {
+    "name": "liblzma (XZ Utils)",
+    "version": "5.8.3",
+    "license": "0BSD",
+    "source": "https://tukaani.org/xz/",
+    "notes": "Dependency of the current native LibTIFF build. Only liblzma is used; XZ tools have separate licensing.",
+    "files": [
+      {
+        "path": "licenses/native/liblzma/COPYING.0BSD",
+        "sha256": "0b01625d853911cd0e2e088dcfb743261034a091bb379246cb25a14cc4c74bf1"
+      },
+      {
+        "path": "licenses/native/liblzma/COPYING",
+        "sha256": "616a3ad264ce29b8f1cb97e53037b139d406899ca8d1f799651e17bfa09830b8"
+      }
+    ]
+  }
+]

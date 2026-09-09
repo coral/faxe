@@ -1,0 +1,9 @@
+<!-- cargo-bundle appends these keys inside its generated Info.plist dictionary. -->
+<key>LSArchitecturePriority</key>
+<array><string>arm64</string></array>
+<key>LSRequiresNativeExecution</key>
+<true/>
+<key>NSHighResolutionCapable</key>
+<true/>
+<key>NSLocalNetworkUsageDescription</key>
+<string>FAXE connects to your SIP server to send and receive faxes.</string>

@@ -1,0 +1,11 @@
+[package]
+name = "faxe-pj-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+links = "faxe_pj"
+
+[build-dependencies]
+bindgen = "0.73.1"
+cc = "1"
+serde_json.workspace = true

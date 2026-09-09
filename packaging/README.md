@@ -1,0 +1,196 @@
+# CI and packaging
+
+`.github/workflows/build.yml` builds on pushes, pull requests and manual dispatch.
+It uses stable Rust, the committed Cargo.lock, and native GitHub-hosted runners.
+Builds use Cargo; packaging uses cargo-bundle, shell/PowerShell, the Windows SDK,
+and flatpak-builder.
+
+| Runner | Target | Downloadable artifact |
+| --- | --- | --- |
+| `macos-15` | macOS arm64, Sequoia 15+ | `.app` in a DMG |
+| `windows-2025` | Windows x64 MSVC | portable ZIP and unsigned MSIX |
+| `windows-11-arm` | Windows arm64 MSVC | portable ZIP and unsigned MSIX |
+| `ubuntu-24.04` | Linux x86_64 | AppImage and Flatpak |
+| `ubuntu-24.04-arm` | Linux aarch64 | AppImage and Flatpak |
+
+Find downloads under **Actions → Build and package → the run → Artifacts**.
+Artifacts are retained for 14 days. Pushes and manual runs on `master` also sign
+and notarize the macOS app. Version tags also publish permanent downloads under **Releases** after every
+package succeeds. The workflow does not submit to a Store.
+Download the matching `faxe-source` artifact when redistributing binaries;
+retain it alongside those binaries after the Actions artifacts expire.
+
+`faxe-source` includes the repository, initialized PJPROJECT sources, vendored
+Cargo dependencies (including SpanDSP's C sources), and build scripts. The
+native dependency setup is pinned in the repository. CI actions are pinned to
+commit IDs. Only the final GitHub release job has repository write permission.
+
+## Desktop builds
+
+Native prerequisites are installed per runner: CMake, Ninja, Clang/libclang,
+pkg-config, TIFF and JPEG; Linux also installs GTK/AppIndicator and AppImage
+tools. Windows imports the native Visual Studio build environment, uses Clang
+with the MSVC ABI, and builds the pinned vcpkg manifest in `windows/vcpkg.json`.
+No SpanDSP dependency sources or build scripts are patched.
+
+The build command is `cargo build --workspace --release --locked` with the
+matrix target in `CARGO_BUILD_TARGET`. `scripts/ci/` then packages those outputs.
+The desktop and headless CLI are included.
+Ordinary local development still starts with `cargo run`.
+
+macOS uses cargo-bundle 0.11.0, collects non-system Homebrew dylibs into
+`Contents/Frameworks`, fixes their library paths and ad-hoc signs the result.
+The compressed DMG contains `FAXE.app` and an Applications shortcut for drag-to-install.
+The build artifact is named `faxe-macos-unsigned`. A separate macOS job on
+`master` or a `v*` tag downloads that run's artifact, signs the app and its libraries with
+Developer ID and hardened runtime, signs the DMG, notarizes it with Apple
+(including the app inside), staples the ticket to the DMG,
+and uploads `faxe-aarch64-apple-darwin`. Pull requests and other branches only
+produce the build artifact. `macos/cargo.toml` remains an optional local overlay.
+
+The signing job uses the GitHub `release` environment, restricted to the
+`master` branch and `v*` tags, with five environment secrets:
+
+- `APPLE_CERTIFICATE_BASE64`: base64-encoded Developer ID Application `.p12`.
+- `APPLE_CERTIFICATE_PASSWORD`: the `.p12` export password.
+- `APPLE_API_KEY_BASE64`: base64-encoded App Store Connect team API key (`.p8`).
+- `APPLE_API_KEY_ID`: the API key ID.
+- `APPLE_API_ISSUER_ID`: the API issuer ID.
+
+Notarization uses the API key; no Apple account password is supplied to CI.
+No provisioning profile or Mac App
+Store record is required for the current direct-download build. Signing material
+is imported into a temporary keychain after the build, never cached or uploaded,
+and removed on exit with an additional always-run cleanup step. Build jobs do
+not receive these secrets. Restrict write access to `master` and its workflows:
+code allowed to run in the signing job can access its credentials.
+
+Linux uses cargo-bundle to create its AppDir, then a checksum-verified
+linuxdeploy release collects shared libraries and creates the final AppImage.
+Builds on Ubuntu 24.04 require a compatible host libc; they do not claim support
+for older Linux distributions. Native notices are copied into the package.
+
+PDFium is pinned to chromium/8044, including Windows ARM64. Packaged binaries
+load PDFium from the application bundle; development builds retain the embedded
+runtime fallback. `FAXE_PDFIUM_ARCHIVE` optionally supplies a local archive to
+the build script, which checks the same target-specific SHA-256 digest.
+
+## Windows identity and signing
+
+With no repository variables configured, MSIX packages use the explicit test
+identity `com.coral.faxe.CI` / `CN=FAXE CI`. They are unsigned CI artifacts, not
+Store submissions or directly installable signed packages. The portable ZIP
+can be used independently of MSIX signing.
+
+To render MSIX with the actual Partner Center identity, set all three GitHub
+repository variables:
+
+- `FAXE_STORE_IDENTITY`: Package/Identity/Name.
+- `FAXE_STORE_PUBLISHER`: Package/Identity/Publisher.
+- `FAXE_STORE_DISPLAY_NAME`: publisher display name.
+
+Partial configuration fails the packaging job. Values are XML-escaped when
+rendering `windows/AppxManifest.xml.in`. The version is the Cargo application
+version plus `.0`. Manifest validation runs through MakeAppx. Signing and Store
+submission remain separate; no certificate or private key is required by CI.
+
+SpanDSP 0.2.3 supplies the Windows static-library build fix. CI uses native
+Actions runners for Windows and Linux compilation and packaging.
+
+## Flatpak
+
+The manifest targets GNOME Platform/SDK 50 with the Rust stable and LLVM 21 SDK
+extensions. Prepare local sources:
+
+```sh
+cargo vendor --locked --versioned-dirs .flatpak-vendor > .flatpak-cargo-config.toml
+git clone https://github.com/flathub/shared-modules.git packaging/flatpak/shared-modules
+git -C packaging/flatpak/shared-modules checkout cb9ec602a1ece1c76d5a4f8aa1d87c4a6bf99c3e
+```
+
+After installing the matching runtimes/extensions and flatpak-builder:
+
+```sh
+flatpak-builder --user --force-clean --disable-rofiles-fuse \
+  --repo=packaging/flatpak/repo packaging/flatpak/build \
+  packaging/flatpak/com.coral.faxe.json
+mkdir -p dist
+flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
+  packaging/flatpak/repo dist/FAXE.flatpak com.coral.faxe
+```
+
+Flatpak sources include a checksum-pinned PDFium archive for each architecture.
+Cargo compiles offline from the vendored crates; the application build module
+has no network grant. The SDK supplies its native runtime libraries. The
+separately pinned AppIndicator shared module is built into the app.
+
+The manifest permits SIP networking, desktop integration, Documents write
+access and Downloads read access. Linux tray handling remains unimplemented in
+FAXE; packaging does not change that application behavior. The local source
+manifest and unfinished AppStream homepage/release fields still need completion
+before a Flathub submission.
+
+## Licensing
+
+FAXE is GPL-3.0-only. Packages include the checked-in license inventory and
+notices from the actual PDFium artifact and native package dependencies. The
+acknowledgments hosted on the website remain generated release inputs; follow
+`licenses/README.md` when dependencies change. Notices do not replace GPL/LGPL
+corresponding-source obligations. Keep the source artifact available for every
+binary release you redistribute.
+
+## Creating a release
+
+Use [cargo-release](https://github.com/crate-ci/cargo-release) through the root
+`release.sh`. All five Rust packages inherit one workspace version, produce one
+release commit and one annotated `vX.Y.Z` tag, and are not published to crates.io.
+
+```sh
+cargo install cargo-release --version 0.25.20 --locked
+cargo install cargo-about --version 0.9.2 --locked --features cli
+./release.sh release             # Preview the first tag at the current version
+./release.sh release --execute   # Confirm, commit if needed, tag and push
+./release.sh patch               # Preview the next patch release
+./release.sh minor --execute     # Or major / an explicit version such as 0.2.0
+```
+
+Commit your changes before executing, and release from `master`. The default is
+a dry run. `--execute` keeps cargo-release's confirmation and clean-tree/remote
+checks. The desktop release hook regenerates license outputs after the lockfile
+version bump, so the release commit contains current acknowledgments. Stable SemVer is supported; prerelease suffixes are rejected because
+Windows MSIX needs a numeric version. CI checks that the tag matches Cargo.toml
+and that each version component fits MSIX's numeric range before packaging.
+
+The tag push runs the existing build matrix, including signing and notarization.
+The final job requires ten nonempty assets: signed macOS DMG, two Windows ZIPs,
+two unsigned MSIXs, two AppImages, two Flatpaks, and corresponding source. It adds
+`SHA256SUMS`, uploads everything to a draft, then publishes it with generated
+release notes. A missing/failed build prevents publication. An upload failure
+leaves a draft; rerun the failed job to finish. Already-public releases are not
+overwritten. Unsigned macOS build inputs are excluded.
+
+The GitHub `release` environment must allow a **tag** deployment rule `v*` as
+well as its existing `master` branch rule. Apple secrets remain environment
+secrets. Repository writers able to push these tags can trigger signing.
+
+## Application icons
+
+`assets/icons` is the source for all application artwork:
+
+- macOS bundles the supplied `faxe.icns` unchanged for Finder and the Dock. The
+  menu bar embeds `menubar/18pt/FaxeMenuBarTemplate@2x.png` and marks it as an
+  AppKit template; tray-icon displays it at 18 logical points.
+- Windows embeds the multi-size color `faxe.ico` into `faxe.exe`, so portable
+  executables have the icon in Explorer. The window and tray use embedded color
+  PNG pixels. The build script generates exact MSIX logo dimensions from the
+  1024-pixel color source, with 200% and 400% variants; packaging copies those
+  generated assets and includes `faxe.ico` in the portable ZIP.
+- AppImage and Flatpak install every supplied `hicolor` PNG size under the
+  `com.coral.faxe` icon name. The AppImage desktop entry and `.DirIcon` use the
+  same color artwork. Linux window icons use embedded color pixels; Linux tray
+  support remains unavailable until the GTK event loop is integrated.
+
+Icon decoding happens at build time, not on the window thread. No runtime icon
+files are required alongside the executable. Windows builds require Windows SDK
+`rc.exe` on PATH (the CI Visual Studio environment supplies it). The generated
+Windows assets live under the desktop build script's `OUT_DIR/msix-assets`.

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=FAXE
+Comment=Send and receive faxes over SIP
+Exec=faxe
+Icon=com.coral.faxe
+Terminal=false
+Categories=Office;Telephony;
+Keywords=fax;SIP;T38;PDF;
+StartupNotify=true

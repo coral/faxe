@@ -1,0 +1,79 @@
+{
+  "app-id": "com.coral.faxe",
+  "runtime": "org.gnome.Platform",
+  "runtime-version": "50",
+  "sdk": "org.gnome.Sdk",
+  "sdk-extensions": [
+    "org.freedesktop.Sdk.Extension.rust-stable",
+    "org.freedesktop.Sdk.Extension.llvm21"
+  ],
+  "command": "faxe",
+  "finish-args": [
+    "--share=network",
+    "--share=ipc",
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--device=dri",
+    "--filesystem=xdg-documents",
+    "--filesystem=xdg-download:ro",
+    "--talk-name=org.freedesktop.secrets",
+    "--talk-name=org.freedesktop.Notifications",
+    "--talk-name=org.kde.StatusNotifierWatcher"
+  ],
+  "build-options": {
+    "libdir": "/app/lib",
+    "append-path": "/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin",
+    "env": {
+      "LIBCLANG_PATH": "/usr/lib/sdk/llvm21/lib"
+    }
+  },
+  "cleanup": ["/include", "/lib/pkgconfig", "/share/man", "*.la", "*.a"],
+  "modules": [
+    "shared-modules/libayatana-appindicator/libayatana-appindicator-gtk3.json",
+    {
+      "name": "faxe",
+      "buildsystem": "simple",
+      "build-options": {
+        "env": {
+          "CARGO_HOME": "/run/build/faxe/.cargo",
+          "CARGO_NET_OFFLINE": "true",
+          "FAXE_PDFIUM_ARCHIVE": "/run/build/faxe/pdfium.tgz"
+        }
+      },
+      "build-commands": [
+        "mkdir -p .cargo && cp .flatpak-cargo-config.toml .cargo/config.toml",
+        "cargo build --offline --locked --release --workspace",
+        "install -Dm755 target/release/faxe /app/bin/faxe",
+        "install -Dm755 target/release/faxe-cli /app/bin/faxe-cli",
+        "mkdir -p pdfium-artifact && tar -xf pdfium.tgz -C pdfium-artifact",
+        "install -Dm755 pdfium-artifact/lib/libpdfium.so /app/lib/libpdfium.so",
+        "install -Dm644 LICENSE /app/share/licenses/faxe/LICENSE",
+        "cp -R licenses /app/share/licenses/faxe/third-party",
+        "cp -R pdfium-artifact/licenses /app/share/licenses/faxe/pdfium-artifact",
+        "install -Dm644 packaging/linux/com.coral.faxe.desktop /app/share/applications/com.coral.faxe.desktop",
+        "bash scripts/ci/install-linux-icons.sh /app 512"
+      ],
+      "sources": [
+        {
+          "type": "dir",
+          "path": "../..",
+          "skip": [".git", ".cargo", ".faxe-local", ".env", "signing", "secrets", "target", "dist", ".flatpak-builder", "packaging/windows/identity.local.json", "packaging/windows/stage", "packaging/flatpak/build", "packaging/flatpak/repo", "packaging/flatpak/shared-modules"]
+        },
+        {
+          "type": "file",
+          "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8044/pdfium-linux-x64.tgz",
+          "sha256": "eb142f416aed3a72fc5a02dbd5884868a16cb99dc0cf53e6bdd64afbf67b05f4",
+          "dest-filename": "pdfium.tgz",
+          "only-arches": ["x86_64"]
+        },
+        {
+          "type": "file",
+          "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8044/pdfium-linux-arm64.tgz",
+          "sha256": "e98400ef5f005f27cfba5c14f72d464e25187298f04950de46646033cf24cef0",
+          "dest-filename": "pdfium.tgz",
+          "only-arches": ["aarch64"]
+        }
+      ]
+    }
+  ]
+}

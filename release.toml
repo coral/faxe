@@ -1,0 +1,13 @@
+# Application releases go to GitHub, not crates.io.
+allow-branch = ["master"]
+publish = false
+shared-version = true
+consolidate-commits = true
+pre-release-commit-message = "chore: release {{version}}"
+tag-name = "v{{version}}"
+tag-prefix = ""
+tag-message = "FAXE {{version}}"
+push-remote = "origin"
+
+# --isolated reads only this config. Run once, after the shared version bump.
+pre-release-hook = ["sh", "-c", 'if [ "$CRATE_NAME" = "faxe-desktop" ]; then python3 "$WORKSPACE_ROOT/scripts/generate-licenses.py"; fi']

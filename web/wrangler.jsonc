@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "faxe-web",
+  "compatibility_date": "2026-09-08",
+  "workers_dev": false,
+  "preview_urls": false,
+  "send_metrics": false,
+  "build": {
+    "command": "pnpm build",
+    "watch_dir": ["src", "public", "../assets/screenshot_mac.png", "../packaging/icons/32.png"]
+  },
+  "routes": [
+    { "pattern": "faxe.oblique.media", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "./dist",
+    "html_handling": "drop-trailing-slash",
+    "not_found_handling": "404-page"
+  }
+}

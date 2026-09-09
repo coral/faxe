@@ -1,0 +1,20 @@
+{
+  "name": "faxe-web",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs && tailwindcss -i src/styles.css -o dist/styles.css --minify",
+    "dev": "wrangler dev --local",
+    "check": "wrangler deploy --dry-run && node scripts/check.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "tailwindcss": "4.3.3",
+    "wrangler": "4.130.0"
+  }
+}

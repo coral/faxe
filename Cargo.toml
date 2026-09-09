@@ -1,0 +1,62 @@
+[workspace]
+members = [".", "crates/faxe-pj-sys", "crates/faxe-native", "crates/faxe-engine", "crates/faxe-cli"]
+default-members = ["."]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.2"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time", "net", "macros", "signal"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.26.0", features = ["v4", "serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+
+[package]
+name = "faxe-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "faxe"
+description = "Send and receive faxes over SIP"
+
+[package.metadata.bundle]
+name = "FAXE"
+identifier = "com.coral.faxe"
+icon = ["assets/icons/faxe.icns", "assets/icons/faxe.ico", "assets/icons/faxe-*.png"]
+category = "Productivity"
+short_description = "Send and receive faxes over SIP"
+long_description = "A desktop fax application with SIP profiles, T.38 and G.711 support, and a PDF inbox."
+osx_minimum_system_version = "15.0"
+osx_info_plist_exts = ["packaging/macos/Info.plist.fragment"]
+linux_use_terminal = false
+
+
+[[bin]]
+name = "faxe"
+path = "src/main.rs"
+
+[dependencies]
+faxe-engine = { path = "crates/faxe-engine" }
+iced = { version = "0.14.0", features = ["tokio", "image-without-codecs", "advanced"] }
+rfd = "0.17.2"
+keyring = "4.2.0"
+# FAXE does not use muda's predefined menu items that synthesize X11 key presses.
+tray-icon = { version = "0.24.2", default-features = false, features = ["gtk"] }
+notify-rust = "4.18.0"
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[build-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>FAXE · Acknowledgments</title>
+<meta name="description" content="Third-party libraries, licenses and notices for FAXE.">
+<link rel="canonical" href="https://faxe.oblique.media/licenses">
+<style>
+:root { color-scheme: dark light; font-family: system-ui, sans-serif; background: #222831; color: #eee; }
+body { margin: 0; line-height: 1.6; }
+main { max-width: 960px; margin: auto; padding: 48px 24px; }
+h1 { font-size: clamp(2rem, 6vw, 3rem); line-height: 1.2; margin-bottom: 16px; }
+h2 { line-height: 1.3; overflow-wrap: anywhere; }
+h3 { font-size: 1rem; }
+a { color: #9bd0d3; text-underline-offset: 3px; }
+.intro { max-width: 720px; }
+.tools { display: flex; flex-wrap: wrap; gap: 12px; margin: 28px 0; }
+input, button { font: inherit; border: 1px solid #667887; border-radius: 6px; padding: 10px 14px; }
+input { flex: 1 1 260px; min-width: 180px; background: #31363f; color: #eee; }
+button { background: #76abae; color: #172025; cursor: pointer; }
+:focus-visible { outline: 3px solid #9bd0d3; outline-offset: 3px; }
+section { border-top: 1px solid #50606e; padding: 24px 0; scroll-margin-top: 24px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.65 ui-monospace, monospace; padding: 20px; background: #31363f; border-radius: 8px; }
+.used-by { overflow-wrap: anywhere; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; border-bottom: 1px solid #50606e; padding: 9px 8px; overflow-wrap: anywhere; }
+.table-wrap { overflow-x: auto; }
+summary { cursor: pointer; font-weight: 600; padding: 12px 0; }
+#empty { padding: 20px 0; }
+@media print {
+  :root { color-scheme: light; background: white; color: black; }
+  main { max-width: none; padding: 0; }
+  .tools, .index, #empty { display: none !important; }
+  section[hidden] { display: block !important; }
+  pre { background: white; padding: 0; font-size: 9pt; }
+  a { color: black; }
+  h2, h3 { break-after: avoid; }
+}
+</style>
+</head>
+<body><main>
+<nav aria-label="Main"><a href="/">← FAXE</a></nav>
+<h1>Acknowledgments</h1>
+<p class="intro">FAXE is open-source software licensed under the GNU General Public License version 3.
+We thank the people behind the libraries that make it possible. Their licenses and notices are reproduced below.</p>
+<p class="intro">This list covers dependencies for macOS, Windows and Linux; some components are used only on certain platforms or during compilation.</p>
+<div class="tools">
+  <input id="search" type="search" aria-label="Search libraries and licenses" placeholder="Search libraries and licenses">
+  <button id="print" type="button">Print all licenses</button>
+</div>
+<details class="index"><summary>Rust dependency index</summary><div class="table-wrap"><table>
+<thead><tr><th scope="col">Library</th><th scope="col">Version</th><th scope="col">License</th></tr></thead>
+<tbody>{{CRATES}}</tbody></table></div></details>
+<p id="empty" role="status" hidden>No matching libraries or licenses.</p>
+{{SECTIONS}}
+</main>
+<script>
+const search = document.getElementById('search');
+const sections = Array.from(document.querySelectorAll('section'));
+const searchable = sections.map(section => section.textContent.toLowerCase());
+function filter() {
+  const query = search.value.trim().toLowerCase();
+  sections.forEach((section, index) => { section.hidden = !searchable[index].includes(query); });
+  document.getElementById('empty').hidden = sections.some(section => !section.hidden);
+}
+search.addEventListener('input', filter);
+document.getElementById('print').addEventListener('click', () => window.print());
+function revealAnchor() {
+  const target = document.getElementById(location.hash.slice(1));
+  if (target && target.hidden) { search.value = ''; filter(); target.scrollIntoView(); }
+}
+window.addEventListener('hashchange', revealAnchor);
+revealAnchor();
+</script>
+</body></html>
