@@ -1264,6 +1264,11 @@ fn open_window() -> Task<Message> {
         size: iced::Size::new(1120.0, 820.0),
         min_size: Some(iced::Size::new(900.0, 650.0)),
         exit_on_close_request: false,
+        #[cfg(target_os = "linux")]
+        platform_specific: window::settings::PlatformSpecific {
+            application_id: "com.coral.faxe".into(),
+            ..Default::default()
+        },
         ..window::Settings::default()
     });
     task.map(Message::Opened)

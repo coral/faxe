@@ -24,8 +24,12 @@ enum Command {
         letter: bool,
         #[arg(long)]
         standard: bool,
-        #[arg(long)]
+        /// Use photo processing (the default).
+        #[arg(long, conflicts_with = "text")]
         photo: bool,
+        /// Use text processing instead of photo processing.
+        #[arg(long)]
+        text: bool,
     },
     Profiles,
     ImportProfile {
@@ -229,7 +233,8 @@ async fn run(arguments: Arguments) -> Result<()> {
             files,
             letter,
             standard,
-            photo,
+            photo: _,
+            text,
         } => {
             let options = DocumentOptions {
                 paper: match letter {
@@ -240,9 +245,9 @@ async fn run(arguments: Arguments) -> Result<()> {
                     true => Resolution::Standard,
                     false => Resolution::Fine,
                 },
-                binarization: match photo {
-                    true => Binarization::Photo,
-                    false => Binarization::Text,
+                binarization: match text {
+                    true => Binarization::Text,
+                    false => Binarization::Photo,
                 },
                 ..DocumentOptions::default()
             };

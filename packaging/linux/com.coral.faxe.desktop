@@ -8,3 +8,4 @@ Terminal=false
 Categories=Office;Telephony;
 Keywords=fax;SIP;T38;PDF;
 StartupNotify=true
+StartupWMClass=com.coral.faxe

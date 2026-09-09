@@ -215,12 +215,12 @@ impl fmt::Display for Resolution {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Binarization {
     #[default]
-    Text,
     Photo,
+    Text,
 }
 
 impl Binarization {
-    pub const ALL: [Self; 2] = [Self::Text, Self::Photo];
+    pub const ALL: [Self; 2] = [Self::Photo, Self::Text];
 }
 
 impl fmt::Display for Binarization {
