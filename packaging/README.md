@@ -85,6 +85,70 @@ the build script, which checks the same target-specific SHA-256 digest.
 
 ## Windows identity and signing
 
+Windows Store packages use `packagedClassicApp` / `appContainer`. Their only
+capabilities are `internetClientServer` (Internet SIP/media traffic) and
+`privateNetworkClientServer` (LAN SIP servers and peers). They do not declare
+`runFullTrust` or other restricted capabilities. Packaging and bundling both
+check each application and its capabilities, so an old full-trust package
+cannot be mixed into the x64/arm64 bundle.
+
+### Local AppContainer testing (Windows x64)
+
+After `scripts/ci/setup-windows.ps1 -Local`, with Windows Developer Mode enabled:
+
+```powershell
+./scripts/test-appcontainer.ps1 -Launch
+```
+
+This builds a debug package, validates it with MakeAppx, registers the separate
+`com.coral.faxe.AppContainerTest` identity, and opens `FAXE AppContainer Test`.
+Close the previous test instance before rebuilding. Each build has a newer
+test version so Windows uses the new staging directory. Build output and the
+latest staging path are in `build/appcontainer/`. Keep the registered staging
+directory in place while using the app. The generated unsigned MSIX is a local
+test artifact; registration uses the loose development manifest.
+
+The test uses the same AppContainer manifest and capabilities as the Store
+package, with a separate identity and development version. See
+[Microsoft's AppContainer packaging guidance](https://learn.microsoft.com/en-us/windows/msix/msix-container).
+
+Packaged builds now use `ApplicationData.LocalFolder` for config, database,
+spool and cache. The `FAXE_APP_DIR` override still takes precedence. Unpackaged
+builds retain their desktop paths. Existing desktop profiles are not imported
+into the test identity. Avoid canonicalizing package-local storage through
+ancestors the sandbox cannot access.
+
+Locally verified: x64 build, MakeAppx validation, package registration, process
+token `TokenIsAppContainer=1`, UI rendering, and engine startup after fixing
+the storage path and receive-folder fallback. The classic document picker
+failed with access denied when browsing Desktop, so packaged builds now use
+`Windows.Storage.Pickers.FileOpenPicker` and copy selected `StorageFile` objects
+through the broker to package-local cache. Imported copies currently remain in
+`LocalCache/import-*` until the test data is removed. A local document import
+and one-page preparation subsequently succeeded. The desktop credential
+backend also failed with access denied; packaged builds now use Windows
+`PasswordVault`, while unpackaged builds retain the existing keyring backend.
+Credential saving and a real outgoing fax were also verified locally. Receiving,
+credential reload after restart, notifications, tray and opening exported files
+still need functional verification. Receive
+folder selection still uses the classic picker, and opening exports currently
+starts Explorer; both need further AppContainer work.
+
+PasswordVault gives AppContainer apps their own credential locker and has a
+[20-credential limit per app](https://learn.microsoft.com/en-us/uwp/api/windows.security.credentials.passwordvault.add).
+Existing desktop credentials are not automatically migrated.
+
+User-visible operation errors are also written to stderr, even with
+`RUST_LOG=off`. Windows console output omits ANSI escapes. For a console launch, capture them with
+`cargo run 2>&1 | Tee-Object faxe-debug.log`. Launching via the Start menu does
+not attach stderr to an existing terminal.
+
+Remove the local test registration when finished (also removes its app data):
+
+```powershell
+Get-AppxPackage -Name com.coral.faxe.AppContainerTest | Remove-AppxPackage
+```
+
 With no repository variables configured, MSIX packages use the explicit test
 identity `com.coral.faxe.CI` / `CN=FAXE CI`. They are unsigned CI artifacts, not
 Store submissions or directly installable signed packages. The portable ZIP
@@ -107,7 +171,8 @@ submission remain separate; no certificate or private key is required by CI.
 
 After the desktop matrix succeeds, the `windows-bundle` job downloads both
 Windows artifacts and runs `scripts/ci/bundle-windows.ps1`. It checks that there
-is exactly one package per architecture with matching identities and versions,
+is exactly one package per architecture with matching identities and versions
+and that both packages use AppContainer with only the two network capabilities,
 then uses [MakeAppx bundle](https://learn.microsoft.com/en-us/windows/msix/packaging-tool/bundle-msix-packages)
 to create `FAXE-<version>-windows-unsigned.msixbundle`. The bundle version is
 explicitly set to the package version (`<version>.0`), and its manifest is checked

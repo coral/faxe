@@ -3,10 +3,15 @@ mod credentials;
 mod desktop;
 mod icons;
 mod tray;
+#[cfg(target_os = "windows")]
+mod windows_picker;
 
 fn main() -> iced::Result {
     tracing_subscriber::fmt()
-        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+        .with_ansi(
+            cfg!(not(target_os = "windows"))
+                && std::io::IsTerminal::is_terminal(&std::io::stderr()),
+        )
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

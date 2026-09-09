@@ -185,6 +185,7 @@ jobs:
           FAXE_STORE_DISPLAY_NAME: ${{ vars.FAXE_STORE_DISPLAY_NAME }}
         run: |
           ./scripts/ci/test-windows-runtime.ps1
+          ./scripts/ci/test-windows-manifest.ps1
           ./scripts/ci/package-windows.ps1
       - name: Upload packages
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

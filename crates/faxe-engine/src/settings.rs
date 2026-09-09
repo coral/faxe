@@ -28,6 +28,14 @@ impl AppDirectories {
                 cache: root.join("cache"),
             });
         }
+        #[cfg(target_os = "windows")]
+        if let Some(root) = package_local_directory()? {
+            return Ok(Self {
+                config: root.join("config"),
+                data: root.join("data"),
+                cache: root.join("cache"),
+            });
+        }
         let dirs = ProjectDirs::from("com", "coral", "faxe")
             .ok_or_else(|| Error::Invalid("Could not determine application directories".into()))?;
         Ok(Self {
@@ -36,6 +44,27 @@ impl AppDirectories {
             cache: dirs.cache_dir().to_owned(),
         })
     }
+}
+
+// AppContainer cannot write to the ordinary desktop profile directories.
+// Resolve storage through the package API, preserving the portable app's paths.
+#[cfg(target_os = "windows")]
+fn package_local_directory() -> Result<Option<PathBuf>> {
+    use windows::{ApplicationModel::Package, Storage::ApplicationData};
+    if let Err(error) = Package::Current() {
+        // HRESULT_FROM_WIN32(APPMODEL_ERROR_NO_PACKAGE): portable desktop app.
+        if error.code().0 as u32 == 0x80073d54 {
+            return Ok(None);
+        }
+        return Err(Error::Invalid(format!(
+            "Could not query package identity: {error}"
+        )));
+    }
+    let path = ApplicationData::Current()
+        .and_then(|data| data.LocalFolder())
+        .and_then(|folder| folder.Path())
+        .map_err(|error| Error::Invalid(format!("Could not resolve package storage: {error}")))?;
+    Ok(Some(PathBuf::from(path.to_os_string())))
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -76,6 +105,12 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn unpackaged_process_keeps_desktop_storage() {
+        assert!(package_local_directory().unwrap().is_none());
+    }
 
     #[test]
     fn preferences_round_trip_and_missing_fields_get_defaults() -> Result<()> {

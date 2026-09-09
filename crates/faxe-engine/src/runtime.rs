@@ -468,8 +468,18 @@ impl Actor {
         events: broadcast::Sender<EngineEvent>,
         effects: mpsc::UnboundedSender<EngineEffect>,
     ) -> Result<Self> {
-        let store = Store::open(&directory)?;
-        let mut documents = Documents::new(directory.join("spool"))?;
+        let store = Store::open(&directory).map_err(|error| {
+            Error::Invalid(format!(
+                "Opening fax database at {}: {error}",
+                directory.display()
+            ))
+        })?;
+        let mut documents = Documents::new(directory.join("spool")).map_err(|error| {
+            Error::Invalid(format!(
+                "Opening document spool at {}: {error}",
+                directory.display()
+            ))
+        })?;
         if let Ok(dirs) = AppDirectories::resolve()
             && directory == dirs.data
         {

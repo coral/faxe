@@ -72,6 +72,9 @@ impl Store {
             // even when it is temporarily unavailable.
             receiving.folder = Some(match directories::UserDirs::new() {
                 Some(dirs) => dirs.document_dir().unwrap_or(dirs.home_dir()).to_owned(),
+                // Package-local storage is already absolute. Canonicalizing it
+                // can require access to ancestors outside an AppContainer.
+                None if directory.is_absolute() => directory.to_owned(),
                 None => fs::canonicalize(directory)?,
             });
             store.save_receive_settings(&receiving)?;

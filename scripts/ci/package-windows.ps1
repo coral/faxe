@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 Set-StrictMode -Version Latest
 . "$PSScriptRoot/windows-runtime.ps1"
+. "$PSScriptRoot/windows-manifest.ps1"
 
 $metadata = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
 # Cargo reports the active OUT_DIR even for cached builds. Globbing build/*
@@ -14,7 +15,9 @@ $desktopId = ($metadata.packages | Where-Object name -eq 'faxe-desktop').id
 $engineOutput = Get-CargoOutputDirectory -Messages $buildMessages -PackageId $engineId
 $desktopOutput = Get-CargoOutputDirectory -Messages $buildMessages -PackageId $desktopId
 $version = ($metadata.packages | Where-Object name -eq 'faxe-desktop').version
-$build = Join-Path $pwd "target\$env:CARGO_BUILD_TARGET\release"
+$executables = @($buildMessages | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.executable })
+$desktopBinary = @($executables | Where-Object { $_.target.name -eq 'faxe' })[0].executable
+$cliBinary = @($executables | Where-Object { $_.target.name -eq 'faxe-cli' })[0].executable
 # A fresh directory also prevents DLLs from an earlier package surviving a rerun.
 $stage = Join-Path $pwd "packaging\windows\stage\$env:PACKAGE_ARCH\$([guid]::NewGuid())"
 $dist = Join-Path $pwd 'dist'
@@ -26,7 +29,7 @@ if (-not (Test-Path -LiteralPath "$pdfiumRoot/.verified" -PathType Leaf)) {
     throw "Missing verified PDFium artifact: $pdfiumRoot"
 }
 # PDFium is loaded dynamically, so seed it explicitly before following imports.
-Copy-WindowsRuntime -Binaries @("$build\faxe.exe", "$build\faxe-cli.exe", "$pdfiumRoot\bin\pdfium.dll") `
+Copy-WindowsRuntime -Binaries @($desktopBinary, $cliBinary, "$pdfiumRoot\bin\pdfium.dll") `
     -SearchDirectories @("$env:FAXE_VCPKG_PREFIX\bin", $redist[0].FullName, "$pdfiumRoot\bin") `
     -Destination $stage
 Copy-Item LICENSE $stage
@@ -72,7 +75,7 @@ foreach ($entry in $replacements.GetEnumerator()) {
     $manifest = $manifest.Replace("@$($entry.Key)@", [System.Security.SecurityElement]::Escape($entry.Value))
 }
 if ($manifest -match '@[A-Z_]+@') { throw 'Unresolved MSIX manifest placeholders' }
-$null = [xml]$manifest
+Assert-FaxeAppContainerManifest -Manifest ([xml]$manifest)
 $manifest | Set-Content "$stage\AppxManifest.xml" -Encoding utf8
 $sdkBin = Join-Path $env:WindowsSdkDir "bin\$($env:WindowsSDKVersion.TrimEnd('\'))"
 $makeAppx = Join-Path $sdkBin "$env:PACKAGE_ARCH\makeappx.exe"

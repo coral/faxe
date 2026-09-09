@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 Set-StrictMode -Version Latest
+. "$PSScriptRoot/windows-manifest.ps1"
 
 function Read-PackageManifest {
     param([string]$Path, [string]$EntryName)
@@ -23,7 +24,9 @@ function Read-PackageManifest {
 $packages = @(Get-ChildItem -LiteralPath $PackagesDirectory -Filter '*.msix' -File)
 if ($packages.Count -ne 2) { throw 'Expected exactly two MSIX packages (x64 and arm64)' }
 $identities = @($packages | ForEach-Object {
-    (Read-PackageManifest -Path $_.FullName -EntryName 'AppxManifest.xml').Package.Identity
+    $packageManifest = Read-PackageManifest -Path $_.FullName -EntryName 'AppxManifest.xml'
+    Assert-FaxeAppContainerManifest -Manifest $packageManifest
+    $packageManifest.Package.Identity
 })
 $architectures = @($identities | ForEach-Object { $_.ProcessorArchitecture } | Sort-Object)
 if (($architectures -join ',') -cne 'arm64,x64') {
@@ -78,5 +81,11 @@ try {
     }
     Write-Host "Created $bundle with x64 and arm64 packages ($($identity.Name), $($identity.Version))"
 } finally {
+    $resolvedStage = [System.IO.Path]::GetFullPath($stage)
+    $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+    if (-not $resolvedStage.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+        (Split-Path $resolvedStage -Leaf) -notlike 'faxe-msixbundle-*') {
+        throw "Refusing to remove an unexpected staging path: $resolvedStage"
+    }
     Remove-Item -LiteralPath $stage -Recurse -Force
 }

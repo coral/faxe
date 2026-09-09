@@ -47,6 +47,7 @@ pub enum Message {
     Tab(Tab),
     Browse,
     Files(Vec<PathBuf>),
+    FilesPicked(Result<Vec<PathBuf>, String>),
     Remove(usize),
     Move(usize, isize),
     Destination(String),
@@ -398,7 +399,7 @@ impl App {
                     Ok(count) => format!(
                         "Cleared {count} queue/history entries. Spool files remain recoverable."
                     ),
-                    Err(error) => error,
+                    Err(error) => report_error(error),
                 });
                 self.hide_progress();
             }
@@ -407,7 +408,7 @@ impl App {
                     self.show_progress(job);
                     self.notice = None;
                 }
-                Err(error) => self.notice = Some(error),
+                Err(error) => self.notice = Some(report_error(error)),
             },
             Message::Started(result) => {
                 self.starting = false;
@@ -437,7 +438,7 @@ impl App {
                                     .cloned()
                                     .or_else(|| self.snapshot.profiles.first().cloned());
                             }
-                            Err(error) => self.notice = Some(error),
+                            Err(error) => self.notice = Some(report_error(error)),
                         }
                         if let Some(profile) = self.selected_profile.clone() {
                             self.editor = profile.into();
@@ -469,12 +470,12 @@ impl App {
                         if self.closing {
                             return iced::exit();
                         }
-                        self.notice = Some(error);
+                        self.notice = Some(report_error(error));
                     }
                 }
             }
             Message::Effect(effect) => match effect {
-                EngineEffect::Error(error) => self.notice = Some(error),
+                EngineEffect::Error(error) => self.notice = Some(report_error(error)),
                 EngineEffect::ReceptionFinished { caller, pages, .. } => {
                     return Task::perform(
                         async move {
@@ -537,6 +538,12 @@ impl App {
             }
             Message::Tab(tab) => self.tab = tab,
             Message::Browse => {
+                #[cfg(target_os = "windows")]
+                if windows::ApplicationModel::Package::Current().is_ok()
+                    && let Some(window) = self.window
+                {
+                    return crate::windows_picker::documents(window).map(Message::FilesPicked);
+                }
                 return Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
@@ -557,6 +564,10 @@ impl App {
                     self.invalidate_document();
                 }
             }
+            Message::FilesPicked(result) => match result {
+                Ok(paths) => return self.update(Message::Files(paths)),
+                Err(error) => self.notice = Some(report_error(error)),
+            },
             Message::Remove(index) => {
                 if self.preparing.is_none() && index < self.paths.len() {
                     self.paths.remove(index);
@@ -728,7 +739,7 @@ impl App {
                         };
                         return Task::batch([preview, apply]);
                     }
-                    Err(error) => self.notice = Some(error),
+                    Err(error) => self.notice = Some(report_error(error)),
                 }
             }
             Message::CancelPreparation => {
@@ -754,7 +765,7 @@ impl App {
                         }
                         Err(error) => {
                             tracing::error!(document_id = %id, page, %error, "Document preview failed");
-                            self.notice = Some(error);
+                            self.notice = Some(report_error(error));
                         }
                     }
                 }
@@ -773,7 +784,7 @@ impl App {
                             self.preview_displayed_revision = revision;
                         }
                         Err(error) if revision == self.preview_revision => {
-                            self.notice = Some(error)
+                            self.notice = Some(report_error(error))
                         }
                         Err(_) => (),
                     }
@@ -892,7 +903,7 @@ impl App {
             }
             Message::ActionFinished(result) => {
                 if let Err(error) = result {
-                    self.notice = Some(error);
+                    self.notice = Some(report_error(error));
                 }
             }
             Message::Stopped(result) => {
@@ -938,7 +949,7 @@ impl App {
                         );
                     }
                 }
-                Err(error) => self.notice = Some(error),
+                Err(error) => self.notice = Some(report_error(error)),
             },
             Message::ProfileSaved(revision, result) => {
                 self.saving_profile = false;
@@ -947,7 +958,7 @@ impl App {
                 }
                 self.notice = Some(match result {
                     Ok(()) => "SIP profile saved.".into(),
-                    Err(error) => error,
+                    Err(error) => report_error(error),
                 });
                 if self.selected_profile.is_none() {
                     self.selected_profile = self.snapshot.profiles.first().cloned();
@@ -1308,4 +1319,10 @@ fn open_path(path: &std::path::Path, reveal: bool) -> Result<(), String> {
     } else {
         Err("Could not open the file in its default application".into())
     }
+}
+
+// Keep user-visible errors available even when RUST_LOG suppresses tracing.
+fn report_error(error: String) -> String {
+    eprintln!("FAXE error: {error}");
+    error
 }

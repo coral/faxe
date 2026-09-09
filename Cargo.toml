@@ -57,6 +57,10 @@ tracing-subscriber.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 secret-service = { version = "5.2.0", features = ["rt-async-io-crypto-rust"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+raw-window-handle = "0.6.2"
+windows = { version = "0.62.2", features = ["ApplicationModel", "Security_Credentials", "Storage", "Storage_Search", "Storage_Pickers", "Storage_Streams", "Win32_UI_Shell", "Win32_Foundation"] }
+
 [build-dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 

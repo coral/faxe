@@ -2,6 +2,8 @@ use faxe_engine::{Credentials, Error, Password, Result, Uuid};
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "windows")]
+mod windows_vault;
 
 pub struct Keychain;
 
@@ -10,6 +12,10 @@ impl Credentials for Keychain {
         save(profile, password.expose())
     }
     fn password(&self, profile: Uuid) -> Result<Option<Password>> {
+        #[cfg(target_os = "windows")]
+        if windows_vault::packaged()? {
+            return windows_vault::load(profile);
+        }
         match entry(profile)?.get_password() {
             Ok(value) => Ok(Some(Password::new(value))),
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -19,6 +25,10 @@ impl Credentials for Keychain {
 }
 
 pub fn save(profile: Uuid, password: &str) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    if windows_vault::packaged()? {
+        return windows_vault::save(profile, password);
+    }
     let entry = entry(profile)?;
     #[cfg(target_os = "linux")]
     let result = linux::save_password(&entry, password);

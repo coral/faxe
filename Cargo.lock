@@ -1356,12 +1356,14 @@ dependencies = [
  "image",
  "keyring",
  "notify-rust",
+ "raw-window-handle",
  "rfd",
  "secret-service",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "tray-icon",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -1390,6 +1392,7 @@ dependencies = [
  "udptl",
  "ureq",
  "uuid",
+ "windows 0.62.2",
 ]
 
 [[package]]
