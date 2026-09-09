@@ -282,14 +282,16 @@ impl CallPump {
                         sip.invite(request, Kind::T38)?;
                         continue;
                     }
-                    return Err(Error::Sip(format!(
-                        "Call ended before T.30 completion: {code} {reason}"
-                    )));
+                    return self.disconnected(
+                        format!("Call ended before T.30 completion: {code} {reason}"),
+                        progress,
+                    );
                 }
                 Event::PeerHangup(reason) => {
-                    return Err(Error::Sip(format!(
-                        "Peer ended call before T.30 completion: {reason}"
-                    )));
+                    return self.disconnected(
+                        format!("Peer ended call before T.30 completion: {reason}"),
+                        progress,
+                    );
                 }
                 Event::Media(description) => {
                     let negotiated = sdp::remote(&description)?;
@@ -483,6 +485,45 @@ impl CallPump {
             }
         }
         Ok(None)
+    }
+
+    fn disconnected(
+        &mut self,
+        reason: String,
+        progress: &mut impl FnMut(FaxEvent),
+    ) -> Result<Option<TransferStats>> {
+        // Receive calls have their own finalization/recovery path in ActiveCall.
+        if !self.receiving {
+            let events = match (&mut self.fax, &mut self.audio, &mut self.packets) {
+                (Some(FaxMedia::Audio(modem)), Some(network), _) => {
+                    modem.receive(&mut network.receive()?);
+                    modem.end_call()?
+                }
+                (Some(FaxMedia::Packets(terminal)), _, Some(network)) => {
+                    // SIP BYE and the final fax response can become readable in
+                    // the same poll. Deliver queued media before ending T.30.
+                    for packet in network.receive()? {
+                        terminal.receive(packet.sequence, &packet.payload)?;
+                    }
+                    terminal.end_call()?
+                }
+                _ => Vec::new(),
+            };
+            for event in events {
+                tracing::debug!(?event, "Fax protocol event at call disconnect");
+                progress(event.clone());
+                if let FaxEvent::Completed(outcome) = event {
+                    return match outcome {
+                        Ok(stats) => {
+                            tracing::info!(?stats, "Fax confirmed before peer disconnected");
+                            Ok(Some(stats))
+                        }
+                        Err(error) => Err(Error::Sip(format!("{reason}; {error}"))),
+                    };
+                }
+            }
+        }
+        Err(Error::Sip(reason))
     }
 }
 

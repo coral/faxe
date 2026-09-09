@@ -24,6 +24,7 @@ enum Scenario {
     LateAnswer,
     PeerUpgrade,
     Direct,
+    HangupAfterReceive,
 }
 
 #[test]
@@ -40,6 +41,11 @@ fn sip_registration_auto_t38_and_g711_fallback_deliver_a_page() -> Result<()> {
 #[test]
 fn sip_tcp_registration_and_direct_t38_deliver_a_page() -> Result<()> {
     run_scenarios(&[Scenario::Direct])
+}
+
+#[test]
+fn sip_peer_hangup_after_receiving_the_fax_preserves_success() -> Result<()> {
+    run_scenarios(&[Scenario::HangupAfterReceive])
 }
 
 #[test]
@@ -392,6 +398,7 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
             let mut received_pages = 0;
             let mut pending_offer = None;
             let mut dialog = None;
+            let mut dialog_peer = None;
             let mut peer_offered = false;
             let mut last_tick = Instant::now();
             let mut last_peer_packet = None;
@@ -403,6 +410,7 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                     return Err("local SIP fax fixture timed out".into());
                 }
                 while let Ok((size, source)) = sip.recv_from(&mut buffer) {
+                    dialog_peer = Some(source);
                     let request = String::from_utf8_lossy(&buffer[..size]);
                     let method = request.split_whitespace().next().unwrap_or_default();
                     match method {
@@ -637,6 +645,11 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                         for event in terminal.events()? {
                             if let FaxEvent::Completed(result) = event {
                                 received_pages = result?.received_pages;
+                                if scenario == Scenario::HangupAfterReceive {
+                                    let bye =
+                                        peer_request(dialog.as_ref().unwrap(), "BYE", port, "");
+                                    sip.send_to(bye.as_bytes(), dialog_peer.unwrap())?;
+                                }
                             }
                         }
                     }

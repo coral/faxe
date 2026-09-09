@@ -201,6 +201,14 @@ impl AudioFax {
     pub fn statistics(&self) -> Result<TransferStats> {
         Ok(statistics(&self.state.get_t30_state()?))
     }
+
+    pub(crate) fn end_call(&mut self) -> Result<Vec<FaxEvent>> {
+        let t30 = self.state.get_t30_state()?;
+        // SpanDSP preserves the negotiated result during final disconnect/pause,
+        // and reports CALLDROPPED when the protocol was interrupted earlier.
+        unsafe { sys::t30_terminate(t30.as_ptr()) };
+        Ok(self.callbacks.events(&t30))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -312,6 +320,12 @@ impl PacketFax {
     }
     pub fn statistics(&self) -> Result<TransferStats> {
         Ok(statistics(&self.state.get_t30_state()?))
+    }
+
+    pub(crate) fn end_call(&mut self) -> Result<Vec<FaxEvent>> {
+        let t30 = self.state.get_t30_state()?;
+        unsafe { sys::t30_terminate(t30.as_ptr()) };
+        Ok(self.callbacks.events(&t30))
     }
 }
 
