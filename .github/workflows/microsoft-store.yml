@@ -56,11 +56,3 @@ jobs:
           PRODUCT_ID: ${{ secrets.PRODUCT_ID }}
           SUBMIT: ${{ inputs.submit || false }}
         run: ./scripts/ci/publish-microsoft-store.ps1 -CheckOnly:($env:SUBMIT -ne 'true')
-      - name: Clear Store credentials
-        if: always()
-        shell: pwsh
-        run: |
-          if (Get-Command msstore -ErrorAction SilentlyContinue) {
-            msstore reconfigure --reset
-            if ($LASTEXITCODE -ne 0) { throw 'Store credential cleanup failed.' }
-          }

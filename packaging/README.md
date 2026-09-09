@@ -222,7 +222,8 @@ Do not edit submissions in Partner Center while CI is submitting an update.
 Run **Actions → Microsoft Store → Run workflow** on `master` to check credentials,
 app access and current submission status without uploading or changing anything.
 This also works while the first submission is in certification. The CLI and its
-setup action are pinned, and credentials are reset in an always-run cleanup step.
+setup action are pinned. Credentials stay on the disposable GitHub-hosted runner;
+this job does not cache or upload CLI settings or credentials.
 Environment deployment rules, if enabled, must permit `v*` tags and `master`
 for this read-only check; required reviewers will pause automatic updates.
 
