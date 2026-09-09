@@ -18,6 +18,7 @@ fn profile() -> SipProfile {
         auth_username: None,
         register: false,
         outbound_proxy: None,
+        audio_playout_delay_ms: 200,
         station_id: "FAXE".into(),
         automatic_nat: false,
         stun_server: None,

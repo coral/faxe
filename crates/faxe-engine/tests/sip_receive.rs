@@ -64,8 +64,21 @@ fn receives_pcma_and_pcmu_and_auto_upgrade_or_rejection() -> TestResult {
 fn receives_on_registered_tcp_flow() -> TestResult {
     run_receive(FaxMode::T38, None, true, true)
 }
+#[test]
+fn receives_g711_page_with_100_ms_packet_jitter_and_reordering() -> TestResult {
+    run_receive_with_jitter(FaxMode::G711, Some(G711::Pcmu), false, false, true)
+}
 static FIXTURE: Mutex<()> = Mutex::new(());
 fn run_receive(mode: FaxMode, codec: Option<G711>, accept_upgrade: bool, tcp: bool) -> TestResult {
+    run_receive_with_jitter(mode, codec, accept_upgrade, tcp, false)
+}
+fn run_receive_with_jitter(
+    mode: FaxMode,
+    codec: Option<G711>,
+    accept_upgrade: bool,
+    tcp: bool,
+    jitter: bool,
+) -> TestResult {
     let _fixture = FIXTURE.lock().unwrap_or_else(|error| error.into_inner());
     eprintln!("Receive scenario: {mode:?}, {codec:?}, accept_upgrade={accept_upgrade}");
     let root = tempfile::tempdir()?;
@@ -103,6 +116,7 @@ fn run_receive(mode: FaxMode, codec: Option<G711>, accept_upgrade: bool, tcp: bo
         auth_username: None,
         register: true,
         outbound_proxy: None,
+        audio_playout_delay_ms: 200,
         station_id: "INBOX".into(),
         automatic_nat: true,
         stun_server: None,
@@ -133,6 +147,8 @@ fn run_receive(mode: FaxMode, codec: Option<G711>, accept_upgrade: bool, tcp: bo
     let mut audio_transmitter = AudioFax::transmitter(&source_tiff, "SENDER")?;
     let mut audio_sequence = 0_u16;
     let mut audio_timestamp = 0_u32;
+    let mut delayed_audio = std::collections::VecDeque::new();
+    let mut delayed_packets = 0;
     let mut audio_peer = None;
     let mut audio_samples = std::collections::VecDeque::new();
     let mut upgraded = codec.is_none();
@@ -401,7 +417,16 @@ fn run_receive(mode: FaxMode, codec: Option<G711>, accept_upgrade: bool, tcp: bo
                 packet.extend(audio_timestamp.to_be_bytes());
                 packet.extend(42_u32.to_be_bytes());
                 packet.extend(codec.encode(audio_transmitter.transmit()));
-                packet_socket.send_to(&packet, peer)?;
+                if jitter && audio_sequence % 8 == 4 {
+                    delayed_audio.push_back((
+                        Instant::now() + Duration::from_millis(100),
+                        packet,
+                        peer,
+                    ));
+                    delayed_packets += 1;
+                } else {
+                    packet_socket.send_to(&packet, peer)?;
+                }
                 audio_sequence = audio_sequence.wrapping_add(1);
                 audio_timestamp = audio_timestamp.wrapping_add(160);
                 for event in audio_transmitter.events()? {
@@ -411,6 +436,13 @@ fn run_receive(mode: FaxMode, codec: Option<G711>, accept_upgrade: bool, tcp: bo
                     }
                 }
             }
+        }
+        while delayed_audio
+            .front()
+            .is_some_and(|(at, _, _)| Instant::now() >= *at)
+        {
+            let (_, packet, peer) = delayed_audio.pop_front().unwrap();
+            packet_socket.send_to(&packet, peer)?;
         }
         let snapshot = engine.snapshot()?;
         if let Some(fax) = snapshot.inbox.first()
@@ -428,6 +460,9 @@ fn run_receive(mode: FaxMode, codec: Option<G711>, accept_upgrade: bool, tcp: bo
                 fax.outcome
             );
             assert_eq!(fax.confirmed_pages, 1);
+            if jitter {
+                assert!(delayed_packets > 100, "fixture must delay real page data");
+            }
             assert_eq!(fax.recovered_pages, 1);
             assert!(fax.partial_page_preservation_available);
             let report = fax

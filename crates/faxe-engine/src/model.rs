@@ -75,6 +75,12 @@ pub struct SipProfile {
     pub automatic_nat: bool,
     #[serde(default)]
     pub stun_server: Option<String>,
+    #[serde(default = "default_audio_playout_delay_ms")]
+    pub audio_playout_delay_ms: u16,
+}
+
+fn default_audio_playout_delay_ms() -> u16 {
+    faxe_native::DEFAULT_AUDIO_PLAYOUT_DELAY_MS
 }
 
 fn enabled() -> bool {
@@ -83,6 +89,8 @@ fn enabled() -> bool {
 
 impl SipProfile {
     pub fn validate(&self) -> Result<()> {
+        faxe_native::validate_audio_playout_delay(self.audio_playout_delay_ms)
+            .map_err(|error| Error::Invalid(error.to_string()))?;
         nonempty("Profile name", &self.name)?;
         nonempty("SIP server", &self.server)?;
         nonempty("SIP username", &self.username)?;

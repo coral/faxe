@@ -23,6 +23,8 @@ pub struct ServiceAccount {
     pub password: Option<String>,
     pub register: bool,
     pub outbound_proxy: Option<String>,
+    /// G.711 receive playout delay, 40–1000 ms; normally 200 ms.
+    pub audio_playout_delay_ms: u16,
     pub automatic_nat: bool,
     pub stun_server: Option<String>,
 }
@@ -37,6 +39,7 @@ impl ServiceAccount {
             password: self.password.as_deref(),
             register: self.register,
             outbound_proxy: self.outbound_proxy.as_deref(),
+            audio_playout_delay_ms: self.audio_playout_delay_ms,
         }
     }
 }
@@ -167,6 +170,9 @@ impl SipService {
         ))
     }
     pub fn configure(&self, config: Option<ReceiveConfig>) -> Result<()> {
+        if let Some(config) = &config {
+            crate::validate_audio_playout_delay(config.account.audio_playout_delay_ms)?;
+        }
         self.command(Command::Configure(config))
     }
     pub fn reconnect(&self) -> Result<()> {
@@ -180,6 +186,7 @@ impl SipService {
         fax: ServiceSend,
         cancelled: Arc<AtomicBool>,
     ) -> Result<mpsc::Receiver<SendUpdate>> {
+        crate::validate_audio_playout_delay(fax.account.audio_playout_delay_ms)?;
         let (updates, receiver) = mpsc::unbounded();
         self.command(Command::Send(fax, cancelled, updates))?;
         Ok(receiver)
@@ -585,6 +592,9 @@ impl ActiveCall {
         });
         // Callbacks remain alive until explicit finalization returns. Drop native
         // state before notifying the exporter, including on cancellation/failure.
+        if let Err(error) = self.pump.drain_audio() {
+            tracing::warn!(%error, "Could not drain buffered fax audio at call end");
+        }
         let recovery = self.incoming.and_then(|_| {
             self.pump.fax.as_mut().map(|fax| match fax {
                 FaxMedia::Audio(modem) => modem.finalize_receive(),

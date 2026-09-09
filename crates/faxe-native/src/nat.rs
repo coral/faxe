@@ -220,8 +220,12 @@ mod tests {
             response.extend([203 ^ COOKIE[0], COOKIE[1], 113 ^ COOKIE[2], 5 ^ COOKIE[3]]);
             server.send_to(&response, source)?;
         }
-        sockets.poll_mappings()?;
-        assert!(!sockets.mapping_pending());
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while sockets.mapping_pending() {
+            sockets.poll_mappings()?;
+            assert!(Instant::now() < deadline, "STUN responses did not arrive");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert_eq!(
             sockets
                 .audio_mapping

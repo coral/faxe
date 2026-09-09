@@ -135,6 +135,7 @@ fn profile_change_is_deferred_cancel_is_isolated_and_shutdown_preserves_interrup
         auth_username: None,
         register: true,
         outbound_proxy: None,
+        audio_playout_delay_ms: 200,
         station_id: "FIXTURE".into(),
         automatic_nat: true,
         stun_server: None,

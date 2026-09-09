@@ -43,6 +43,8 @@ pub struct Account<'a> {
     pub password: Option<&'a str>,
     pub register: bool,
     pub outbound_proxy: Option<&'a str>,
+    /// G.711 receive playout delay, 40–1000 ms; normally 200 ms.
+    pub audio_playout_delay_ms: u16,
 }
 
 pub struct SendRequest<'a> {
@@ -113,6 +115,7 @@ pub fn send(
     cancelled: impl Fn() -> bool,
     mut progress: impl FnMut(FaxEvent),
 ) -> Result<TransferStats> {
+    crate::validate_audio_playout_delay(request.account.audio_playout_delay_ms)?;
     progress(FaxEvent::Stage(FaxStage::Connecting));
     let _owner = loop {
         if cancelled() {
@@ -312,6 +315,7 @@ impl CallPump {
                                 codec,
                                 sockets.automatic_nat,
                                 sockets.audio_mapping.clone(),
+                                request.account.audio_playout_delay_ms,
                             )?);
                         }
                         RemoteMedia::T38 {
@@ -415,8 +419,15 @@ impl CallPump {
         self.next_frame += Duration::from_millis(20);
         let events = match (&mut self.fax, &mut self.audio, &mut self.packets) {
             (Some(FaxMedia::Audio(modem)), Some(network), _) => {
-                let mut frame = network.receive()?;
-                modem.receive(&mut frame);
+                // RX has its own playout clock. After a worker stall, consume
+                // due samples in order even if the TX clock was rescheduled.
+                // Bound catch-up so signaling and the other call get a turn.
+                for _ in 0..64 {
+                    let Some(mut frame) = network.receive()? else {
+                        break;
+                    };
+                    modem.receive(&mut frame);
+                }
                 network.send(modem.transmit())?;
                 if network.last_received.elapsed() > Duration::from_secs(30) {
                     return Err(Error::Sip("No incoming RTP for 30 seconds".into()));
@@ -449,7 +460,11 @@ impl CallPump {
                 terminal.events()?
             }
             (None, Some(network), _) => {
-                network.receive()?;
+                for _ in 0..64 {
+                    if network.receive()?.is_none() {
+                        break;
+                    }
+                }
                 let frame = std::array::from_fn(|_| {
                     let index = self.cng_samples;
                     self.cng_samples += 1;
@@ -487,40 +502,52 @@ impl CallPump {
         Ok(None)
     }
 
+    fn drain_audio(&mut self) -> Result<()> {
+        if let (Some(FaxMedia::Audio(modem)), Some(network)) = (&mut self.fax, &mut self.audio) {
+            for mut frame in network.drain()? {
+                modem.receive(&mut frame);
+            }
+        }
+        Ok(())
+    }
+
     fn disconnected(
         &mut self,
         reason: String,
         progress: &mut impl FnMut(FaxEvent),
     ) -> Result<Option<TransferStats>> {
-        // Receive calls have their own finalization/recovery path in ActiveCall.
-        if !self.receiving {
-            let events = match (&mut self.fax, &mut self.audio, &mut self.packets) {
-                (Some(FaxMedia::Audio(modem)), Some(network), _) => {
-                    modem.receive(&mut network.receive()?);
+        self.drain_audio()?;
+        let events = match (&mut self.fax, &mut self.audio, &mut self.packets) {
+            (Some(FaxMedia::Audio(modem)), Some(_), _) => {
+                // Receive finalization remains in ActiveCall, but draining
+                // may have delivered the final DCN and completed T.30.
+                if self.receiving {
+                    modem.events()?
+                } else {
                     modem.end_call()?
                 }
-                (Some(FaxMedia::Packets(terminal)), _, Some(network)) => {
-                    // SIP BYE and the final fax response can become readable in
-                    // the same poll. Deliver queued media before ending T.30.
-                    for packet in network.receive()? {
-                        terminal.receive(packet.sequence, &packet.payload)?;
+            }
+            (Some(FaxMedia::Packets(terminal)), _, Some(network)) if !self.receiving => {
+                // SIP BYE and the final fax response can become readable in
+                // the same poll. Deliver queued media before ending T.30.
+                for packet in network.receive()? {
+                    terminal.receive(packet.sequence, &packet.payload)?;
+                }
+                terminal.end_call()?
+            }
+            _ => Vec::new(),
+        };
+        for event in events {
+            tracing::debug!(?event, "Fax protocol event at call disconnect");
+            progress(event.clone());
+            if let FaxEvent::Completed(outcome) = event {
+                return match outcome {
+                    Ok(stats) => {
+                        tracing::info!(?stats, "Fax confirmed before peer disconnected");
+                        Ok(Some(stats))
                     }
-                    terminal.end_call()?
-                }
-                _ => Vec::new(),
-            };
-            for event in events {
-                tracing::debug!(?event, "Fax protocol event at call disconnect");
-                progress(event.clone());
-                if let FaxEvent::Completed(outcome) = event {
-                    return match outcome {
-                        Ok(stats) => {
-                            tracing::info!(?stats, "Fax confirmed before peer disconnected");
-                            Ok(Some(stats))
-                        }
-                        Err(error) => Err(Error::Sip(format!("{reason}; {error}"))),
-                    };
-                }
+                    Err(error) => Err(Error::Sip(format!("{reason}; {error}"))),
+                };
             }
         }
         Err(Error::Sip(reason))
@@ -1062,15 +1089,16 @@ impl Sip {
     }
 
     fn poll(&self) -> Result<()> {
-        if let Some(tls) = &self.tls {
-            tls.poll()?;
-        }
         unsafe {
             check(pj::pjsip_endpt_handle_events(
                 self.endpt,
                 &pj::pj_time_val { sec: 0, msec: 10 },
-            ))
+            ))?;
         }
+        if let Some(tls) = &self.tls {
+            tls.poll()?;
+        }
+        Ok(())
     }
 
     fn release_invite(&mut self) {

@@ -94,6 +94,7 @@ pub enum Message {
     ActionFinished(Result<(), String>),
     AutomaticNat(bool),
     Stun(String),
+    AudioPlayoutDelay(String),
     Stopped(Result<(), String>),
     ProfileSaved(u64, Result<(), String>),
     Hide,
@@ -161,6 +162,7 @@ struct ProfileEditor {
     station: String,
     automatic_nat: bool,
     stun: String,
+    audio_playout_delay_ms: String,
     sending_mode: FaxMode,
 }
 
@@ -180,6 +182,7 @@ impl Default for ProfileEditor {
             station: "Faxe".into(),
             automatic_nat: true,
             stun: String::new(),
+            audio_playout_delay_ms: "200".into(),
             sending_mode: FaxMode::Auto,
         }
     }
@@ -201,6 +204,7 @@ impl From<SipProfile> for ProfileEditor {
             station: profile.station_id,
             automatic_nat: profile.automatic_nat,
             stun: profile.stun_server.unwrap_or_default(),
+            audio_playout_delay_ms: profile.audio_playout_delay_ms.to_string(),
             sending_mode: profile.sending_mode,
         }
     }
@@ -224,6 +228,10 @@ impl ProfileEditor {
             station_id: self.station.clone(),
             automatic_nat: self.automatic_nat,
             stun_server: nonempty(&self.stun),
+            audio_playout_delay_ms: self
+                .audio_playout_delay_ms
+                .parse()
+                .map_err(|_| "Enter an audio receive delay from 40 to 1000 ms".to_owned())?,
             sending_mode: self.sending_mode,
         };
         profile.validate().map_err(|e| e.to_string())?;
@@ -363,6 +371,7 @@ impl App {
                 | Message::Station(_)
                 | Message::AutomaticNat(_)
                 | Message::Stun(_)
+                | Message::AudioPlayoutDelay(_)
                 | Message::SendingMode(_)
         ) {
             self.profile_revision += 1;
@@ -831,6 +840,7 @@ impl App {
                 }
             }
             Message::AutomaticNat(value) => self.editor.automatic_nat = value,
+            Message::AudioPlayoutDelay(value) => self.editor.audio_playout_delay_ms = value,
             Message::Stun(value) => self.editor.stun = value,
             Message::EnableReceive(id, enabled) => {
                 let mut settings = self.snapshot.receive_settings.clone();

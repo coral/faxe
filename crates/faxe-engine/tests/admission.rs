@@ -36,6 +36,7 @@ fn pending_admission_is_busy_times_out_and_rejects_a_late_success() -> TestResul
             password: None,
             register: true,
             outbound_proxy: None,
+            audio_playout_delay_ms: 200,
             automatic_nat: false,
             stun_server: None,
         },

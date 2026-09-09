@@ -36,6 +36,7 @@ pub(crate) fn account(profile: &SipProfile, password: Option<&str>) -> faxe_nati
         outbound_proxy: profile.outbound_proxy.clone(),
         automatic_nat: profile.automatic_nat,
         stun_server: profile.stun_server.clone(),
+        audio_playout_delay_ms: profile.audio_playout_delay_ms,
     }
 }
 pub(crate) fn mode(mode: FaxMode) -> faxe_native::Mode {

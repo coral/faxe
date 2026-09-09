@@ -19,6 +19,91 @@ struct Connection {
     failed: Option<String>,
 }
 
+const PING_INTERVAL: Duration = Duration::from_secs(25);
+const PONG_TIMEOUT: Duration = Duration::from_secs(10);
+
+struct Keepalive {
+    last_ping: Instant,
+    pending_ping: Option<Instant>,
+    // A SIP Supported header may describe a downstream registrar, not this
+    // connection's peer. Require a pong only after this peer has answered one
+    // of our probes. RFC 5626 section 4.4 permits probes without pong support.
+    pong_supported: bool,
+    first_crlf: Option<Crlf>,
+}
+
+struct Crlf {
+    probe: Option<Instant>,
+    supported: bool,
+}
+
+impl Keepalive {
+    fn new(now: Instant) -> Self {
+        Self {
+            last_ping: now,
+            pending_ping: None,
+            pong_supported: false,
+            first_crlf: None,
+        }
+    }
+
+    fn next_deadline(&self) -> Instant {
+        if self.pong_supported
+            && let Some(at) = self.pending_ping
+        {
+            return at + PONG_TIMEOUT;
+        }
+        self.last_ping + PING_INTERVAL
+    }
+
+    // Two adjacent CRLF tokens are a peer ping, even across TLS reads. A
+    // single token can satisfy our probe immediately, but retain its prior
+    // state until the next token disambiguates a fragmented double CRLF.
+    fn crlf(&mut self) -> bool {
+        if let Some(first) = self.first_crlf.take() {
+            if first.probe.is_some() {
+                self.pending_ping = first.probe;
+                self.pong_supported = first.supported;
+            }
+            return true;
+        }
+        self.first_crlf = Some(Crlf {
+            probe: self.pending_ping.take(),
+            supported: self.pong_supported,
+        });
+        if self.first_crlf.as_ref().unwrap().probe.is_some() {
+            self.pong_supported = true;
+        }
+        false
+    }
+
+    fn message(&mut self) {
+        self.first_crlf = None;
+    }
+
+    // Called only AFTER processing received bytes, including a queued pong.
+    fn tick(&mut self, now: Instant) -> Result<bool> {
+        if self.pong_supported && self.pending_ping.is_some_and(|at| now >= at + PONG_TIMEOUT) {
+            return Err(Error::Sip("TLS keepalive pong timed out".into()));
+        }
+        if now >= self.last_ping + PING_INTERVAL {
+            // Pongs to distinct probes are not a double CRLF. Whitespace
+            // received before any probe may still be half of a peer ping.
+            if self
+                .first_crlf
+                .as_ref()
+                .is_some_and(|first| first.probe.is_some())
+            {
+                self.first_crlf = None;
+            }
+            self.last_ping = now;
+            self.pending_ping = Some(now);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+}
+
 impl Connection {
     fn pump(&mut self) -> Result<Vec<u8>> {
         if let Some(error) = &self.failed {
@@ -99,8 +184,7 @@ pub(crate) struct Transport {
     incoming: RefCell<Vec<u8>>,
     receive_pool: *mut pj::pj_pool_t,
     destroyed: Cell<bool>,
-    last_ping: Cell<Instant>,
-    pending_ping: Cell<Option<Instant>>,
+    keepalive: RefCell<Keepalive>,
     reactor: Option<crate::sip::io::Io>,
 }
 
@@ -211,8 +295,7 @@ impl Transport {
                 incoming: RefCell::new(incoming),
                 receive_pool: ptr::null_mut(),
                 destroyed: Cell::new(false),
-                last_ping: Cell::new(Instant::now()),
-                pending_ping: Cell::new(None),
+                keepalive: RefCell::new(Keepalive::new(Instant::now())),
                 reactor: None,
             });
             let base = transport.base.get_mut();
@@ -286,10 +369,7 @@ impl Transport {
         }
     }
     pub(crate) fn next_deadline(&self) -> Instant {
-        self.pending_ping
-            .get()
-            .map(|at| at + Duration::from_secs(10))
-            .unwrap_or_else(|| self.last_ping.get() + Duration::from_secs(25))
+        self.keepalive.borrow().next_deadline()
     }
     fn flush(&self) -> Result<()> {
         let Some(reactor) = &self.reactor else {
@@ -352,41 +432,46 @@ impl Transport {
         if self.destroyed.get() {
             return Err(Error::Sip("TLS transport closed".into()));
         }
-        if self
-            .pending_ping
-            .get()
-            .is_some_and(|at| at.elapsed() > Duration::from_secs(10))
-        {
-            return Err(Error::Sip("TLS keepalive pong timed out".into()));
-        }
-        if self.pending_ping.get().is_none()
-            && self.last_ping.get().elapsed() >= Duration::from_secs(25)
-        {
-            self.io.borrow_mut().tls.writer().write_all(b"\r\n\r\n")?;
-            self.last_ping.set(Instant::now());
-            self.pending_ping.set(Some(Instant::now()));
+        let expiring = {
+            let state = self.keepalive.borrow();
+            state.pong_supported
+                && state.pending_ping.is_some()
+                && Instant::now() >= state.next_deadline()
+        };
+        if expiring && self.reactor.is_some() {
+            // After a worker stall the pong may still be in the OS socket,
+            // not yet in our callback queue. Dispatch ready I/O before expiry.
+            // PJPROJECT remains the sole reader of the registered descriptor.
+            for _ in 0..16 {
+                let ready = unsafe {
+                    pj::pj_ioqueue_poll(
+                        pj::pjsip_endpt_get_ioqueue((*self.base.get()).endpt),
+                        &pj::pj_time_val { sec: 0, msec: 0 },
+                    )
+                };
+                if ready <= 0 {
+                    break;
+                }
+            }
         }
         let bytes = self.pump()?;
         self.incoming.borrow_mut().extend(bytes);
         loop {
             {
                 let mut incoming = self.incoming.borrow_mut();
-                if incoming.starts_with(b"\r\n\r\n") {
-                    incoming.drain(..4);
-                    self.io.borrow_mut().tls.writer().write_all(b"\r\n")?;
-                    self.flush()?;
-                    continue;
-                }
                 if incoming.starts_with(b"\r\n") {
-                    if incoming.len() == 2 && self.pending_ping.get().is_none() {
-                        break;
-                    }
                     incoming.drain(..2);
-                    self.pending_ping.set(None);
+                    if self.keepalive.borrow_mut().crlf() {
+                        self.io.borrow_mut().tls.writer().write_all(b"\r\n")?;
+                        self.flush()?;
+                    }
                     continue;
                 }
                 if incoming.as_slice() == b"\r" {
                     break;
+                }
+                if !incoming.is_empty() {
+                    self.keepalive.borrow_mut().message();
                 }
             }
             let mut received = Box::<pj::pjsip_rx_data>::default();
@@ -432,6 +517,10 @@ impl Transport {
                     _ => break,
                 }
             }
+        }
+        if self.keepalive.borrow_mut().tick(Instant::now())? {
+            self.io.borrow_mut().tls.writer().write_all(b"\r\n\r\n")?;
+            self.flush()?;
         }
         Ok(())
     }
@@ -529,6 +618,78 @@ pub(crate) mod tests {
 
     thread_local! {
         pub(crate) static TRUST: RefCell<Option<Arc<ClientConfig>>> = const { RefCell::new(None) };
+    }
+
+    #[test]
+    fn keepalive_does_not_require_pongs_until_peer_demonstrates_support() {
+        let now = Instant::now();
+        let mut state = Keepalive::new(now);
+        state.crlf();
+        state.message(); // Unsolicited whitespace is not a response to a probe.
+        assert!(!state.pong_supported);
+        assert!(state.tick(now + PING_INTERVAL).unwrap());
+        assert_eq!(state.next_deadline(), now + PING_INTERVAL * 2);
+        assert!(!state.tick(now + PING_INTERVAL + PONG_TIMEOUT).unwrap());
+        assert!(state.tick(now + PING_INTERVAL * 2).unwrap());
+        state.crlf();
+        state.message();
+        assert!(state.pong_supported);
+        assert!(state.tick(now + PING_INTERVAL * 3).unwrap());
+        assert_eq!(
+            state.next_deadline(),
+            now + PING_INTERVAL * 3 + PONG_TIMEOUT
+        );
+        assert!(state.tick(state.next_deadline()).is_err());
+    }
+
+    #[test]
+    fn keepalive_queued_pong_wins_over_expired_deadline() {
+        let now = Instant::now();
+        let mut state = Keepalive::new(now);
+        state.tick(now + PING_INTERVAL).unwrap();
+        state.crlf();
+        state.message();
+        state.tick(now + PING_INTERVAL * 2).unwrap();
+        let resumed = state.next_deadline() + Duration::from_millis(50);
+        state.crlf();
+        state.message();
+        assert!(!state.tick(resumed).unwrap());
+        assert_eq!(state.next_deadline(), now + PING_INTERVAL * 3);
+    }
+
+    #[test]
+    fn fragmented_peer_ping_does_not_establish_pong_support() {
+        let now = Instant::now();
+        let mut state = Keepalive::new(now);
+        state.tick(now + PING_INTERVAL).unwrap();
+        assert!(!state.crlf());
+        assert!(state.crlf()); // Reply to the completed peer ping.
+        assert!(!state.pong_supported);
+        assert_eq!(state.pending_ping, Some(now + PING_INTERVAL));
+        assert!(!state.tick(now + PING_INTERVAL + PONG_TIMEOUT).unwrap());
+    }
+
+    #[test]
+    fn whitespace_before_probe_cannot_satisfy_that_probe() {
+        let now = Instant::now();
+        let mut state = Keepalive::new(now);
+        assert!(!state.crlf());
+        state.tick(now + PING_INTERVAL).unwrap();
+        assert!(state.crlf());
+        assert!(!state.pong_supported);
+        assert_eq!(state.pending_ping, Some(now + PING_INTERVAL));
+    }
+
+    #[test]
+    fn pongs_to_separate_probes_are_not_mistaken_for_a_peer_ping() {
+        let now = Instant::now();
+        let mut state = Keepalive::new(now);
+        for round in 1..=3 {
+            assert!(state.tick(now + PING_INTERVAL * round).unwrap());
+            assert!(!state.crlf());
+            assert!(state.pong_supported);
+            assert_eq!(state.pending_ping, None);
+        }
     }
 
     fn header<'a>(message: &'a str, name: &str) -> &'a str {
@@ -669,6 +830,7 @@ pub(crate) mod tests {
                         password: None,
                         register: true,
                         outbound_proxy: proxy.then_some(proxy_uri.as_str()),
+                        audio_playout_delay_ms: 200,
                     },
                     destination: &destination,
                     file: Path::new("unused-before-media.tiff"),
@@ -695,6 +857,11 @@ pub(crate) mod tests {
     #[test]
     fn persistent_tls_answers_inbound_and_fragmented_crlf_then_preserves_bye_reason() {
         receive_fixture(Duration::ZERO);
+    }
+
+    #[test]
+    fn persistent_tls_without_pong_support_survives_old_35_second_cutoff() {
+        receive_fixture(Duration::from_secs(36));
     }
 
     /// Run alone with --release --ignored --nocapture, then sample the printed PID.
@@ -742,6 +909,7 @@ pub(crate) mod tests {
                     password: None,
                     register: true,
                     outbound_proxy: None,
+                    audio_playout_delay_ms: 200,
                     automatic_nat: true,
                     stun_server: None,
                 },
@@ -785,11 +953,21 @@ pub(crate) mod tests {
                 "idle SIP published a state change"
             );
         }
-        stream.write_all(b"\r\n").unwrap();
-        stream.flush().unwrap();
-        thread::sleep(Duration::from_millis(30));
-        stream.write_all(b"\r\n").unwrap();
-        stream.flush().unwrap();
+        if idle >= PING_INTERVAL {
+            let mut probe = [0; 4];
+            stream.read_exact(&mut probe).unwrap();
+            assert_eq!(&probe, b"\r\n\r\n");
+            // Intentionally never pong. An incoming ping doesn't demonstrate
+            // support for answering our probes, either.
+            stream.write_all(b"\r\n\r\n").unwrap();
+            stream.flush().unwrap();
+        } else {
+            stream.write_all(b"\r\n").unwrap();
+            stream.flush().unwrap();
+            thread::sleep(Duration::from_millis(30));
+            stream.write_all(b"\r\n").unwrap();
+            stream.flush().unwrap();
+        }
         let mut pong = [0; 2];
         stream.read_exact(&mut pong).unwrap();
         assert_eq!(&pong, b"\r\n");

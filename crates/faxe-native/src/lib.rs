@@ -7,6 +7,8 @@ mod g711;
 mod logging;
 mod nat;
 mod network;
+mod playout;
+pub use playout::{DEFAULT_AUDIO_PLAYOUT_DELAY_MS, validate_audio_playout_delay};
 mod recovery;
 pub use recovery::*;
 mod sdp;

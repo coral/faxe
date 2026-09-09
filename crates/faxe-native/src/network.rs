@@ -2,14 +2,15 @@ use crate::sip::io::DatagramSocket;
 use crate::{
     Error, FRAME_SAMPLES, G711, IfpPacket, Result,
     nat::{Mapping, Peer},
+    playout::{Playout, ReceiveStats},
 };
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, VecDeque},
+    collections::VecDeque,
     io::ErrorKind,
     net::{IpAddr, SocketAddr, UdpSocket},
     rc::Rc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 use udptl::{ErrorRecovery, RedundancyReceiver, UdptlPacket};
 
@@ -124,9 +125,9 @@ pub(crate) struct AudioNetwork {
     timestamp: u32,
     ssrc: u32,
     source: Option<u32>,
-    anchor: Option<u32>,
-    cursor: i64,
-    samples: BTreeMap<i64, i16>,
+    playout: Playout,
+    reported: ReceiveStats,
+    last_report: Instant,
     pub last_received: Instant,
 }
 
@@ -137,11 +138,12 @@ impl AudioNetwork {
         codec: G711,
         symmetric: bool,
         mapping: Option<Rc<RefCell<Mapping>>>,
+        playout_delay_ms: u16,
     ) -> Result<Self> {
         let socket = socket.try_clone()?;
 
         let random = *uuid::Uuid::new_v4().as_bytes();
-        tracing::debug!(peer = %address, ?codec, "RTP socket connected");
+        tracing::debug!(peer = %address, ?codec, playout_delay_ms, "RTP socket connected");
         Ok(Self {
             socket,
             peer: Peer::new(address, symmetric),
@@ -151,9 +153,9 @@ impl AudioNetwork {
             timestamp: u32::from_be_bytes(random[2..6].try_into().unwrap()),
             ssrc: u32::from_be_bytes(random[6..10].try_into().unwrap()),
             source: None,
-            anchor: None,
-            cursor: -320,
-            samples: BTreeMap::new(),
+            playout: Playout::new(playout_delay_ms)?,
+            reported: ReceiveStats::default(),
+            last_report: Instant::now(),
             last_received: Instant::now(),
         })
     }
@@ -180,7 +182,21 @@ impl AudioNetwork {
         Ok(())
     }
 
-    pub fn receive(&mut self) -> Result<[i16; FRAME_SAMPLES]> {
+    pub fn receive(&mut self) -> Result<Option<[i16; FRAME_SAMPLES]>> {
+        self.receive_packets()?;
+        let frame = self.playout.receive(Instant::now());
+        if self.last_report.elapsed() >= Duration::from_secs(1) {
+            self.report(false);
+        }
+        Ok(frame)
+    }
+
+    pub fn drain(&mut self) -> Result<Vec<[i16; FRAME_SAMPLES]>> {
+        self.receive_packets()?;
+        Ok(self.playout.drain())
+    }
+
+    fn receive_packets(&mut self) -> Result<()> {
         let mut buffer = [0_u8; 4096];
         for _ in 0..64 {
             let (size, source) = match self.socket.recv_from(&mut buffer) {
@@ -215,30 +231,31 @@ impl AudioNetwork {
                 continue;
             }
             self.source = Some(packet.ssrc);
-            let anchor = *self.anchor.get_or_insert(packet.timestamp);
-            let offset = i64::from(packet.timestamp.wrapping_sub(anchor) as i32);
-            if offset > self.cursor + 8000 {
-                continue;
-            }
-            for (index, byte) in packet.payload.iter().enumerate() {
-                let position = offset + index as i64;
-                if position >= self.cursor {
-                    self.samples
-                        .entry(position)
-                        .or_insert_with(|| self.codec.decode_sample(*byte));
-                }
-            }
+            self.playout
+                .insert(packet.timestamp, packet.payload, self.codec, Instant::now());
             self.last_received = Instant::now();
         }
-        let frame = std::array::from_fn(|index| {
-            self.samples
-                .remove(&(self.cursor + index as i64))
-                .unwrap_or(0)
-        });
-        if self.anchor.is_some() {
-            self.cursor += FRAME_SAMPLES as i64;
+        Ok(())
+    }
+
+    fn report(&mut self, final_report: bool) {
+        let stats = self.playout.stats;
+        if stats != self.reported || final_report {
+            tracing::info!(peer = %self.peer.address, final_report,
+                late_samples = stats.late_samples,
+                overflow_samples = stats.overflow_samples,
+                duplicate_samples = stats.duplicate_samples,
+                missing_samples = stats.missing_samples,
+                "G.711 receive quality");
         }
-        Ok(frame)
+        self.reported = stats;
+        self.last_report = Instant::now();
+    }
+}
+
+impl Drop for AudioNetwork {
+    fn drop(&mut self) {
+        self.report(true);
     }
 }
 
@@ -446,20 +463,31 @@ mod tests {
         local.set_nonblocking(true)?;
         let address = local.local_addr()?;
         let socket = DatagramSocket::new(local)?;
+        let wait_for_packet = || {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut buffer = [0; 2048];
+            while socket.peek_from(&mut buffer).is_err() {
+                assert!(Instant::now() < deadline, "loopback packet did not arrive");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
         let peer = UdpSocket::bind("127.0.0.1:0")?;
         let mut network = PacketNetwork::new(&socket, peer.local_addr()?, 400, false, None)?;
         let bytes = UdptlPacket::with_redundancy(0, vec![0], vec![]).encode();
         peer.send_to(&bytes, address)?;
+        wait_for_packet();
         assert_eq!(network.receive()?.len(), 1);
         let stale = Instant::now() - Duration::from_secs(31);
         network.last_activity = stale;
         peer.send_to(&bytes, address)?;
+        wait_for_packet();
         assert!(network.receive()?.is_empty());
         assert_eq!(network.last_activity, stale);
         peer.send_to(
             &UdptlPacket::with_redundancy(1, vec![0], vec![]).encode(),
             address,
         )?;
+        wait_for_packet();
         assert_eq!(network.receive()?.len(), 1);
         assert!(network.last_activity > stale);
         Ok(())

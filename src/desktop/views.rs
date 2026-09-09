@@ -474,6 +474,12 @@ impl App {
                 pick_list(FaxMode::ALL, Some(self.editor.sending_mode), Message::SendingMode)
             ].spacing(16).align_y(Vertical::Center),
             receiving,
+            row![
+                text("Audio receive delay (ms)").width(Fill),
+                text_input("200", &self.editor.audio_playout_delay_ms)
+                    .on_input(Message::AudioPlayoutDelay).width(90)
+            ].spacing(16).align_y(Vertical::Center),
+            text("40–1000 ms. A larger delay helps G.711 fax tolerate uneven packet arrival. Applies to sending and receiving.").size(13),
             rule::horizontal(1),
             text("Connection").size(14),
             text_input("Profile name", &self.editor.name).on_input(Message::Name),
