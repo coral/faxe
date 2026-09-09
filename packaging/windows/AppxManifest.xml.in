@@ -7,7 +7,7 @@
   <Identity Name="@IDENTITY_NAME@" Publisher="@IDENTITY_PUBLISHER@"
             Version="@VERSION@" ProcessorArchitecture="@ARCHITECTURE@"/>
   <Properties>
-    <DisplayName>FAXE</DisplayName>
+    <DisplayName>FAXE ( FAX over SIP )</DisplayName>
     <PublisherDisplayName>@PUBLISHER_DISPLAY_NAME@</PublisherDisplayName>
     <Description>Send and receive faxes over SIP</Description>
     <Logo>Assets\StoreLogo.png</Logo>
@@ -19,7 +19,7 @@
   <Applications>
     <Application Id="FAXE" Executable="faxe.exe"
                  uap10:RuntimeBehavior="packagedClassicApp" uap10:TrustLevel="mediumIL">
-      <uap:VisualElements DisplayName="FAXE" Description="Send and receive faxes over SIP"
+      <uap:VisualElements DisplayName="FAXE ( FAX over SIP )" Description="Send and receive faxes over SIP"
                           BackgroundColor="#222831" Square150x150Logo="Assets\Square150x150Logo.png"
                           Square44x44Logo="Assets\Square44x44Logo.png"/>
     </Application>

@@ -12,10 +12,10 @@ version = runpy.run_path('scripts/ci/check-release.py')['release_version']()
 expected = [
     ('faxe-aarch64-apple-darwin', f'FAXE-{version}-macos-arm64.dmg'),
     ('faxe-source', 'faxe-source.tar.gz'),
+    ('faxe-windows-bundle', f'FAXE-{version}-windows-unsigned.msixbundle'),
 ]
 for arch, target in [('x64', 'x86_64'), ('arm64', 'aarch64')]:
-    for suffix in ['portable.zip', 'unsigned.msix']:
-        expected.append((f'faxe-{target}-pc-windows-msvc', f'FAXE-{version}-windows-{arch}-{suffix}'))
+    expected.append((f'faxe-{target}-pc-windows-msvc', f'FAXE-{version}-windows-{arch}-portable.zip'))
 for arch in ['x86_64', 'aarch64']:
     expected.extend([
         (f'faxe-{arch}-unknown-linux-gnu', f'FAXE-{version}-linux-{arch}.AppImage'),

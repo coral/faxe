@@ -10,6 +10,7 @@ and flatpak-builder.
 | `macos-15` | macOS arm64, Sequoia 15+ | `.app` in a DMG |
 | `windows-2025` | Windows x64 MSVC | portable ZIP and unsigned MSIX |
 | `windows-11-arm` | Windows arm64 MSVC | portable ZIP and unsigned MSIX |
+| `windows-2025` | Windows x64 + arm64 bundle | unsigned MSIX bundle |
 | `ubuntu-24.04` | Linux x86_64 | AppImage and Flatpak |
 | `ubuntu-24.04-arm` | Linux aarch64 | AppImage and Flatpak |
 
@@ -96,10 +97,29 @@ repository variables:
 - `FAXE_STORE_PUBLISHER`: Package/Identity/Publisher.
 - `FAXE_STORE_DISPLAY_NAME`: publisher display name.
 
+The package and application display name in the manifest matches the reserved
+Store name `FAXE ( FAX over SIP )`.
+
 Partial configuration fails the packaging job. Values are XML-escaped when
 rendering `windows/AppxManifest.xml.in`. The version is the Cargo application
 version plus `.0`. Manifest validation runs through MakeAppx. Signing and Store
 submission remain separate; no certificate or private key is required by CI.
+
+After the desktop matrix succeeds, the `windows-bundle` job downloads both
+Windows artifacts and runs `scripts/ci/bundle-windows.ps1`. It checks that there
+is exactly one package per architecture with matching identities and versions,
+then uses [MakeAppx bundle](https://learn.microsoft.com/en-us/windows/msix/packaging-tool/bundle-msix-packages)
+to create `FAXE-<version>-windows-unsigned.msixbundle`. The bundle version is
+explicitly set to the package version (`<version>.0`), and its manifest is checked
+for both architectures before upload as the `faxe-windows-bundle` artifact.
+The individual MSIX files remain available in the architecture build artifacts.
+
+For a Store submission, configure the three Partner Center identity variables
+above before building, then upload the `.msixbundle` from `faxe-windows-bundle`
+to Partner Center's Packages page. Microsoft signs packages distributed through
+the Store; CI leaves this submission bundle unsigned. An unsigned bundle using
+the fallback CI identity is only a test artifact. Direct installation outside
+the Store requires signing the bundle separately.
 
 SpanDSP 0.2.3 supplies the Windows static-library build fix. CI uses native
 Actions runners for Windows and Linux compilation and packaging.
@@ -169,8 +189,8 @@ Windows MSIX needs a numeric version. CI checks that the tag matches Cargo.toml
 and that each version component fits MSIX's numeric range before packaging.
 
 The tag push runs the existing build matrix, including signing and notarization.
-The final job requires ten nonempty assets: signed macOS DMG, two Windows ZIPs,
-two unsigned MSIXs, two AppImages, two Flatpaks, and corresponding source. It adds
+The final job requires nine nonempty assets: signed macOS DMG, two Windows ZIPs,
+one unsigned MSIX bundle, two AppImages, two Flatpaks, and corresponding source. It adds
 `SHA256SUMS`, uploads everything to a draft, then publishes it with generated
 release notes. A missing/failed build prevents publication. An upload failure
 leaves a draft; rerun the failed job to finish. Already-public releases are not

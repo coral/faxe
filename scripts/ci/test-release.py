@@ -22,6 +22,7 @@ class ReleaseTests(unittest.TestCase):
             'faxe-aarch64-apple-darwin': ['FAXE-1.2.3-macos-arm64.dmg'],
             'faxe-source': ['faxe-source.tar.gz'],
             'faxe-macos-unsigned': ['DO-NOT-PUBLISH.dmg'],
+            'faxe-windows-bundle': ['FAXE-1.2.3-windows-unsigned.msixbundle'],
         }
         for arch, target in [('x64', 'x86_64'), ('arm64', 'aarch64')]:
             assets[f'faxe-{target}-pc-windows-msvc'] = [
@@ -62,9 +63,11 @@ esac
         result = self.run_release()
         self.assertEqual(result.returncode, 0, result.stderr)
         assets = self.root / 'release-assets'
-        self.assertEqual(len(list(assets.iterdir())), 11)
+        self.assertEqual(len(list(assets.iterdir())), 10)
         self.assertFalse((assets / 'DO-NOT-PUBLISH.dmg').exists())
-        self.assertEqual(len((assets / 'SHA256SUMS').read_text().splitlines()), 10)
+        self.assertTrue((assets / 'FAXE-1.2.3-windows-unsigned.msixbundle').is_file())
+        self.assertEqual(list(assets.glob('*.msix')), [])
+        self.assertEqual(len((assets / 'SHA256SUMS').read_text().splitlines()), 9)
         verified = subprocess.run(['sha256sum', '--check', 'SHA256SUMS'], cwd=assets, capture_output=True)
         self.assertEqual(verified.returncode, 0)
         self.assertIn('release create v1.2.3 --verify-tag --draft', self.commands())
@@ -79,6 +82,17 @@ esac
         self.env['GITHUB_REF_NAME'] = 'v1.2.4'
         self.assertNotEqual(self.run_release().returncode, 0)
         self.assertEqual(self.commands(), '')
+
+    def test_missing_or_empty_bundle_never_creates_release(self):
+        bundle = self.root / 'artifacts/faxe-windows-bundle/FAXE-1.2.3-windows-unsigned.msixbundle'
+        for state in ['empty', 'missing']:
+            with self.subTest(state=state):
+                if state == 'empty':
+                    bundle.write_bytes(b'')
+                else:
+                    bundle.unlink()
+                self.assertNotEqual(self.run_release().returncode, 0)
+                self.assertEqual(self.commands(), '')
 
     def test_failed_upload_keeps_draft(self):
         self.env['GH_TEST_FAIL_UPLOAD'] = '1'
