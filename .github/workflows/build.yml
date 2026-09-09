@@ -27,6 +27,9 @@ jobs:
           persist-credentials: false
       - name: Test release asset publication
         run: python3 scripts/ci/test-release.py
+      - name: Test Store submission guards
+        shell: pwsh
+        run: ./scripts/ci/test-microsoft-store.ps1
       - name: Check generated license inventory
         run: python3 scripts/generate-licenses.py --check-page
       - name: Check tag matches workspace version
@@ -319,3 +322,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: bash scripts/ci/publish-release.sh
+
+  microsoft-store:
+    name: Microsoft Store update
+    needs: release
+    if: github.repository == 'coral/faxe' && startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request'
+    uses: ./.github/workflows/microsoft-store.yml
+    with:
+      submit: true

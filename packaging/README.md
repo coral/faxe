@@ -17,7 +17,8 @@ and flatpak-builder.
 Find downloads under **Actions → Build and package → the run → Artifacts**.
 Artifacts are retained for 14 days. Pushes and manual runs on `master` also sign
 and notarize the macOS app. Version tags also publish permanent downloads under **Releases** after every
-package succeeds. The workflow does not submit to a Store.
+package succeeds. Successful version-tag releases then submit the Windows bundle
+to Microsoft Store using the `ms` environment.
 Download the matching `faxe-source` artifact when redistributing binaries;
 retain it alongside those binaries after the Actions artifacts expire.
 
@@ -188,6 +189,42 @@ the Store requires signing the bundle separately.
 
 SpanDSP 0.2.3 supplies the Windows static-library build fix. CI uses native
 Actions runners for Windows and Linux compilation and packaging.
+
+### Automated Microsoft Store updates
+
+`.github/workflows/microsoft-store.yml` uses the GitHub environment **`ms`**:
+
+- `AZURE_AD_TENANT_ID`: the associated Microsoft Entra tenant ID.
+- `AZURE_AD_APPLICATION_CLIENT_ID`: the CI app registration's client ID.
+- `AZURE_AD_APPLICATION_SECRET`: the client secret **value**, not its ID.
+- `SELLER_ID`: numeric Seller ID from Partner Center's Legal info / Developer page.
+- `PRODUCT_ID`: FAXE's Store ID, `9PK6QF9MMNGJ`.
+
+Add the Entra application in Partner Center's User management with the Manager
+role. The first submission must be published and live before automated updates
+can run. Microsoft currently documents this GitHub workflow for free products.
+See [Microsoft's setup instructions](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/github-actions).
+
+After a `vX.Y.Z` build publishes its complete GitHub release, the Store job
+downloads that run's `faxe-windows-bundle` and verifies the version, Store
+identity, publisher and architectures before uploading and committing it for
+certification. It reuses the last published listing and availability settings;
+select automatic publication after certification in Partner Center if updates
+should go live without a manual release. The job waits for commit processing,
+not the full certification. A green job means submitted, not certified or live.
+
+Store jobs are serialized. An existing draft or pending certification stops
+upload, because `msstore publish` can otherwise replace a draft. Resolve the
+existing submission in Partner Center before rerunning the failed Store job.
+If an upload or commit fails, inspect Partner Center first: a draft may remain.
+Do not edit submissions in Partner Center while CI is submitting an update.
+
+Run **Actions → Microsoft Store → Run workflow** on `master` to check credentials,
+app access and current submission status without uploading or changing anything.
+This also works while the first submission is in certification. The CLI and its
+setup action are pinned, and credentials are reset in an always-run cleanup step.
+Environment deployment rules, if enabled, must permit `v*` tags and `master`
+for this read-only check; required reviewers will pause automatic updates.
 
 ## Flatpak
 

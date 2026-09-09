@@ -1,0 +1,66 @@
+name: Microsoft Store
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      submit:
+        type: boolean
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  store:
+    name: ${{ inputs.submit && 'Submit Store update' || 'Check Store connection and status' }}
+    if: github.repository == 'coral/faxe' && (!inputs.submit || (startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request'))
+    runs-on: windows-2025
+    environment: ms
+    timeout-minutes: 30
+    concurrency:
+      group: microsoft-store-faxe
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Test Store submission guards
+        shell: pwsh
+        run: ./scripts/ci/test-microsoft-store.ps1
+      - name: Install Microsoft Store CLI
+        uses: microsoft/microsoft-store-apppublisher@15abd1c50fcc164b19cb240fb04ef3c49bf715a2 # v1.1
+        with:
+          version: v0.4.2
+      - name: Configure Store credentials
+        shell: pwsh
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+        run: |
+          foreach ($name in @('AZURE_AD_TENANT_ID', 'AZURE_AD_APPLICATION_CLIENT_ID', 'AZURE_AD_APPLICATION_SECRET', 'SELLER_ID')) {
+            if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Missing ms environment secret: $name" }
+          }
+          msstore reconfigure --tenantId "$env:AZURE_AD_TENANT_ID" --sellerId "$env:SELLER_ID" --clientId "$env:AZURE_AD_APPLICATION_CLIENT_ID" --clientSecret "$env:AZURE_AD_APPLICATION_SECRET"
+          if ($LASTEXITCODE -ne 0) { throw 'Store credential configuration failed.' }
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        if: inputs.submit
+        with:
+          name: faxe-windows-bundle
+          path: store-package
+      - name: Check status or submit update
+        shell: pwsh
+        env:
+          PRODUCT_ID: ${{ secrets.PRODUCT_ID }}
+          SUBMIT: ${{ inputs.submit || false }}
+        run: ./scripts/ci/publish-microsoft-store.ps1 -CheckOnly:($env:SUBMIT -ne 'true')
+      - name: Clear Store credentials
+        if: always()
+        shell: pwsh
+        run: |
+          if (Get-Command msstore -ErrorAction SilentlyContinue) {
+            msstore reconfigure --reset
+            if ($LASTEXITCODE -ne 0) { throw 'Store credential cleanup failed.' }
+          }
