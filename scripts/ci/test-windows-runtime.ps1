@@ -2,6 +2,28 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . "$PSScriptRoot/windows-runtime.ps1"
 
+$messages = @(
+    [pscustomobject]@{ reason = 'compiler-artifact'; package_id = 'engine'; filenames = @('app.exe') }
+    [pscustomobject]@{ reason = 'build-script-executed'; package_id = 'engine'; out_dir = 'current/engine/out' }
+    [pscustomobject]@{ reason = 'build-script-executed'; package_id = 'desktop'; out_dir = 'current/desktop/out' }
+    [pscustomobject]@{ reason = 'build-finished'; success = $true }
+)
+if ((Get-CargoOutputDirectory -Messages $messages -PackageId 'engine') -ne 'current/engine/out') {
+    throw 'Did not select the engine build output'
+}
+foreach ($case in @('missing', 'ambiguous')) {
+    $inputMessages = if ($case -eq 'missing') { $messages[0] } else {
+        $messages + [pscustomobject]@{ reason = 'build-script-executed'; package_id = 'engine'; out_dir = 'other/out' }
+    }
+    $failure = $null
+    try { Get-CargoOutputDirectory -Messages $inputMessages -PackageId 'engine' } catch {
+        $failure = $_.Exception.Message
+    }
+    if ($failure -notlike 'Expected one build output for engine, found *') {
+        throw "Did not reject $case Cargo build output: $failure"
+    }
+}
+
 # Exercise dependency traversal independently of the runner's installed DLLs.
 $root = Join-Path $PSScriptRoot "../../build/runtime-tests/$([guid]::NewGuid())"
 $source = New-Item -ItemType Directory -Path "$root/source" -Force

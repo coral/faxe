@@ -1,5 +1,8 @@
 use faxe_engine::{Credentials, Error, Password, Result, Uuid};
 
+#[cfg(target_os = "linux")]
+mod linux;
+
 pub struct Keychain;
 
 impl Credentials for Keychain {
@@ -16,9 +19,12 @@ impl Credentials for Keychain {
 }
 
 pub fn save(profile: Uuid, password: &str) -> Result<()> {
-    entry(profile)?
-        .set_password(password)
-        .map_err(|error| Error::Credentials(error.to_string()))
+    let entry = entry(profile)?;
+    #[cfg(target_os = "linux")]
+    let result = linux::save_password(&entry, password);
+    #[cfg(not(target_os = "linux"))]
+    let result = entry.set_password(password);
+    result.map_err(|error| Error::Credentials(error.to_string()))
 }
 
 fn entry(profile: Uuid) -> Result<keyring::Entry> {

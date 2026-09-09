@@ -4,6 +4,15 @@ Set-StrictMode -Version Latest
 . "$PSScriptRoot/windows-runtime.ps1"
 
 $metadata = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
+# Cargo reports the active OUT_DIR even for cached builds. Globbing build/*
+# also finds outputs from tests and previous feature/dependency combinations.
+$buildMessages = @(cargo build --workspace --release --locked --message-format=json | ForEach-Object {
+    $_ | ConvertFrom-Json
+})
+$engineId = ($metadata.packages | Where-Object name -eq 'faxe-engine').id
+$desktopId = ($metadata.packages | Where-Object name -eq 'faxe-desktop').id
+$engineOutput = Get-CargoOutputDirectory -Messages $buildMessages -PackageId $engineId
+$desktopOutput = Get-CargoOutputDirectory -Messages $buildMessages -PackageId $desktopId
 $version = ($metadata.packages | Where-Object name -eq 'faxe-desktop').version
 $build = Join-Path $pwd "target\$env:CARGO_BUILD_TARGET\release"
 # A fresh directory also prevents DLLs from an earlier package surviving a rerun.
@@ -12,9 +21,10 @@ $dist = Join-Path $pwd 'dist'
 New-Item -ItemType Directory -Force $stage, $dist | Out-Null
 $redist = @(Get-ChildItem "$env:VCToolsRedistDir\$env:PACKAGE_ARCH\Microsoft.VC*.CRT" -Directory)
 if ($redist.Count -ne 1) { throw 'Expected one MSVC CRT redistributable directory' }
-$pdfium = @(Get-ChildItem "$build\build\faxe-engine-*\out\pdfium-8044\.verified")
-if ($pdfium.Count -ne 1) { throw 'Expected one PDFium artifact' }
-$pdfiumRoot = $pdfium[0].Directory.FullName
+$pdfiumRoot = Join-Path $engineOutput 'pdfium-8044'
+if (-not (Test-Path -LiteralPath "$pdfiumRoot/.verified" -PathType Leaf)) {
+    throw "Missing verified PDFium artifact: $pdfiumRoot"
+}
 # PDFium is loaded dynamically, so seed it explicitly before following imports.
 Copy-WindowsRuntime -Binaries @("$build\faxe.exe", "$build\faxe-cli.exe", "$pdfiumRoot\bin\pdfium.dll") `
     -SearchDirectories @("$env:FAXE_VCPKG_PREFIX\bin", $redist[0].FullName, "$pdfiumRoot\bin") `
@@ -28,10 +38,9 @@ foreach ($notice in Get-ChildItem "$env:FAXE_VCPKG_PREFIX\share\*\copyright") {
     New-Item -ItemType Directory -Force $destination | Out-Null
     Copy-Item $notice.FullName $destination
 }
-$iconAssets = @(Get-ChildItem "$build\build\faxe-desktop-*\out\msix-assets" -Directory)
-if ($iconAssets.Count -ne 1) { throw 'Expected one generated MSIX icon asset directory' }
+$iconAssets = Join-Path $desktopOutput 'msix-assets'
 New-Item -ItemType Directory -Force "$stage\Assets" | Out-Null
-Copy-Item "$($iconAssets[0].FullName)\*.png" "$stage\Assets"
+Copy-Item "$iconAssets\*.png" "$stage\Assets"
 Copy-Item assets/icons/faxe.ico "$stage\faxe.ico"
 $revision = git rev-parse HEAD
 @"

@@ -1,3 +1,17 @@
+function Get-CargoOutputDirectory {
+    param(
+        [Parameter(Mandatory)][object[]]$Messages,
+        [Parameter(Mandatory)][string]$PackageId
+    )
+    $directories = @($Messages | Where-Object {
+        $_.reason -eq 'build-script-executed' -and $_.package_id -eq $PackageId
+    } | ForEach-Object { $_.out_dir } | Sort-Object -Unique)
+    if ($directories.Count -ne 1) {
+        throw "Expected one build output for $PackageId, found $($directories.Count)"
+    }
+    $directories[0]
+}
+
 function Get-WindowsImports([string]$Binary) {
     # Includes both normal and delay-load import tables, for x64 and ARM64.
     $output = & llvm-readobj.exe --coff-imports $Binary

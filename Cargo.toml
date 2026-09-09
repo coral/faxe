@@ -54,6 +54,9 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service = { version = "5.2.0", features = ["rt-async-io-crypto-rust"] }
+
 [build-dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 

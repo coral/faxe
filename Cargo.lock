@@ -1343,6 +1343,7 @@ dependencies = [
  "keyring",
  "notify-rust",
  "rfd",
+ "secret-service",
  "tokio",
  "tracing",
  "tracing-subscriber",
