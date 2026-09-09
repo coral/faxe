@@ -22,6 +22,19 @@ Individual targets are `faxe_native::pjsip`, `faxe_native::spandsp`,
 `faxe_native::sip::wire` and `faxe_native::network`. Trace packet logging is
 verbose and can affect timing; enable it only while diagnosing a problem.
 
+For slow page preparation, `RUST_LOG=faxe_engine::document=debug cargo run`
+logs image decoding, rasterization, TIFF writing, preview generation, and spool
+publication times. Run the synthetic image benchmark with
+`cargo test -p faxe-engine preparation_benchmark -- --ignored --nocapture`.
+Development builds optimize the image codecs, resizer, and engine pixel loops
+so ordinary `cargo run` does not spend seconds processing each page.
+
+After preparing a document, use the Contrast slider beside Text/Photo for a
+live preview. Releasing it applies the setting to all pages; keyboard/wheel
+adjustments apply after a short pause. Ctrl-click (Command-click on macOS)
+resets contrast to zero. Tone edits reuse cached grayscale pages, and queued
+faxes retain their original settings.
+
 ## Development dependencies
 
 On Windows, install Rust with the native MSVC toolchain, Visual Studio 2022

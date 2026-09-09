@@ -45,6 +45,8 @@ pub struct OutgoingFax<'a> {
 pub enum TransmissionProgress {
     Stage(crate::FaxStage),
     PageAcknowledged(u32),
+    T38Activity { transmitted_bytes: u64 },
+    PageProgress(crate::PageProgress),
 }
 
 #[derive(Debug, Clone)]

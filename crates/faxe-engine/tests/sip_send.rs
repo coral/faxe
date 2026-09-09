@@ -43,6 +43,29 @@ fn sip_tcp_registration_and_direct_t38_deliver_a_page() -> Result<()> {
 }
 
 #[test]
+fn sip_t38_sends_dense_page_with_over_30_seconds_between_peer_packets() -> Result<()> {
+    run_scenarios_with_dense_page(&[Scenario::Direct], true)
+}
+
+#[test]
+fn t38_protocol_times_out_a_peer_that_never_responds() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let mut terminal = PacketFax::receiver(&root.path().join("unanswered.tiff"), "TIMEOUT TEST")?;
+    // Advance the real protocol clock without sleeping or delivering replies.
+    for _ in 0..6000 {
+        terminal.tick();
+        terminal.packets();
+        for event in terminal.events()? {
+            if let FaxEvent::Completed(result) = event {
+                assert!(result.is_err(), "silence must never count as delivery");
+                return Ok(());
+            }
+        }
+    }
+    panic!("T.30 did not time out an unresponsive peer within 120 seconds");
+}
+
+#[test]
 fn sip_options_and_peer_bye_reasons_work_over_udp_and_tcp() -> Result<()> {
     for tcp in [false, true] {
         for reason in [
@@ -225,19 +248,43 @@ fn sip_options_and_peer_bye_reasons_work_over_udp_and_tcp() -> Result<()> {
 }
 
 fn run_scenarios(scenarios: &[Scenario]) -> Result<()> {
+    run_scenarios_with_dense_page(scenarios, false)
+}
+
+fn run_scenarios_with_dense_page(scenarios: &[Scenario], dense: bool) -> Result<()> {
+    run_scenarios_with_options(scenarios, dense, true)
+}
+
+#[test]
+fn sip_t38_without_ecm_reports_page_progress() -> Result<()> {
+    run_scenarios_with_options(&[Scenario::Direct], false, false)
+}
+
+fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) -> Result<()> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_test_writer()
         .try_init();
     let root = tempfile::tempdir()?;
     let input = root.path().join("page.png");
-    image::GrayImage::from_fn(200, 300, |x, y| {
-        image::Luma([match (x, y) {
-            (20..=180, 30..=260) if y % 30 < 5 => 0,
-            _ => 255,
-        }])
-    })
-    .save(&input)?;
+    if dense {
+        let mut noise = 1_u32;
+        image::GrayImage::from_fn(1728, 2200, |_, y| {
+            noise ^= noise << 13;
+            noise ^= noise >> 17;
+            noise ^= noise << 5;
+            image::Luma([if y < 400 && noise & 1 == 0 { 0 } else { 255 }])
+        })
+        .save(&input)?;
+    } else {
+        image::GrayImage::from_fn(200, 300, |x, y| {
+            image::Luma([match (x, y) {
+                (20..=180, 30..=260) if y % 30 < 5 => 0,
+                _ => 255,
+            }])
+        })
+        .save(&input)?;
+    }
     let documents = Documents::new(root.path().join("spool"))?;
     let prepared = documents.prepare(
         DocumentInput {
@@ -261,6 +308,10 @@ fn run_scenarios(scenarios: &[Scenario]) -> Result<()> {
         let cancel = stop.clone();
         let (result_tx, result_rx) = mpsc::channel();
         let sender = thread::spawn(move || {
+            let mut activity_updates = 0;
+            let mut transmitted_bytes = 0;
+            let mut page_updates = 0;
+            let mut last_page_progress: Option<faxe_native::PageProgress> = None;
             let result = faxe_native::send(
                 faxe_native::SendRequest {
                     account: faxe_native::Account {
@@ -285,8 +336,45 @@ fn run_scenarios(scenarios: &[Scenario]) -> Result<()> {
                     },
                 },
                 || cancel.load(Ordering::Relaxed),
-                |_| {},
+                |event| {
+                    if let FaxEvent::PageProgress(page) = event {
+                        assert!(page.total_rows > 0 && page.rows <= page.total_rows);
+                        if let Some(previous) = last_page_progress {
+                            assert!(page.page > previous.page || page.rows >= previous.rows);
+                        }
+                        last_page_progress = Some(page);
+                        page_updates += 1;
+                    }
+                    if let FaxEvent::T38Activity {
+                        transmitted_bytes: bytes,
+                    } = event
+                    {
+                        assert!(bytes > transmitted_bytes);
+                        transmitted_bytes = bytes;
+                        activity_updates += 1;
+                    }
+                },
             );
+            if !ecm && result.is_ok() {
+                assert!(
+                    page_updates > 1,
+                    "non-ECM T.38 must report within-page progress"
+                );
+                let page = last_page_progress.expect("missing non-ECM progress");
+                assert_eq!(page.rows, page.total_rows);
+            }
+            if dense && result.is_ok() {
+                assert!(
+                    page_updates > 10,
+                    "T.38 progress must advance within a page"
+                );
+                let page = last_page_progress.expect("missing image progress");
+                assert_eq!(page.rows, page.total_rows);
+                assert!(
+                    activity_updates > 100,
+                    "long T.38 transfers must report live activity"
+                );
+            }
             result_tx.send(result).ok();
         });
         let outcome = (|| -> Result<()> {
@@ -306,6 +394,8 @@ fn run_scenarios(scenarios: &[Scenario]) -> Result<()> {
             let mut dialog = None;
             let mut peer_offered = false;
             let mut last_tick = Instant::now();
+            let mut last_peer_packet = None;
+            let mut longest_peer_silence = Duration::ZERO;
             let deadline = Instant::now() + Duration::from_secs(180);
             let mut buffer = [0_u8; 65536];
             loop {
@@ -384,7 +474,9 @@ fn run_scenarios(scenarios: &[Scenario]) -> Result<()> {
                             let media = match t38 {
                                 true => {
                                     modem = None;
-                                    terminal = Some(PacketFax::receiver(&output, "FIXTURE")?);
+                                    terminal = Some(PacketFax::receiver_with_ecm(
+                                        &output, "FIXTURE", ecm,
+                                    )?);
                                     packet_peer =
                                         Some(SocketAddr::from(([127, 0, 0, 1], remote_port)));
                                     format!(
@@ -426,7 +518,9 @@ fn run_scenarios(scenarios: &[Scenario]) -> Result<()> {
                                 match scenario {
                                     Scenario::LateAnswer => {
                                         modem = None;
-                                        terminal = Some(PacketFax::receiver(&output, "FIXTURE")?);
+                                        terminal = Some(PacketFax::receiver_with_ecm(
+                                            &output, "FIXTURE", ecm,
+                                        )?);
                                         packet_peer = Some(SocketAddr::from((
                                             [127, 0, 0, 1],
                                             image_port(&offer)?,
@@ -470,7 +564,8 @@ fn run_scenarios(scenarios: &[Scenario]) -> Result<()> {
                             if code == 200 && header(&request, "CSeq").unwrap().ends_with("INVITE")
                             {
                                 modem = None;
-                                terminal = Some(PacketFax::receiver(&output, "FIXTURE")?);
+                                terminal =
+                                    Some(PacketFax::receiver_with_ecm(&output, "FIXTURE", ecm)?);
                                 packet_peer =
                                     Some(SocketAddr::from(([127, 0, 0, 1], image_port(&request)?)));
                                 sip.send_to(
@@ -522,6 +617,11 @@ fn run_scenarios(scenarios: &[Scenario]) -> Result<()> {
                     if let (Some(terminal), Some(peer)) = (&mut terminal, packet_peer) {
                         terminal.tick();
                         for packet in terminal.packets() {
+                            let now = Instant::now();
+                            if let Some(previous) = last_peer_packet.replace(now) {
+                                longest_peer_silence =
+                                    longest_peer_silence.max(now.duration_since(previous));
+                            }
                             let envelope = UdptlPacket::with_redundancy(
                                 sequence,
                                 packet.payload.clone(),
@@ -544,6 +644,12 @@ fn run_scenarios(scenarios: &[Scenario]) -> Result<()> {
                 if let Ok(result) = result_rx.try_recv() {
                     assert_eq!(result?.sent_pages, 1);
                     assert_eq!(received_pages, 1);
+                    if dense {
+                        assert!(
+                            longest_peer_silence > Duration::from_secs(30),
+                            "fixture must exercise a long T.38 receive gap: {longest_peer_silence:?}"
+                        );
+                    }
                     assert!(
                         saw_authorization,
                         "REGISTER never answered the digest challenge"

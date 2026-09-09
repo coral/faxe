@@ -195,6 +195,8 @@ impl Store {
             state: JobState::Queued,
             retry_of,
             steps: Vec::new(),
+            transmitted_bytes: 0,
+            page_progress: None,
         };
         self.connection.execute(
             "INSERT INTO jobs (id,created,status,data) VALUES (?1,?2,'queued',?3)",

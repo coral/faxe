@@ -63,3 +63,25 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Image resampling and dithering are prohibitively slow without optimization,
+# even for a single fax page. Keep ordinary `cargo run` builds responsive.
+[profile.dev.package.image]
+opt-level = 3
+
+# Generic image operations are instantiated in the engine, so optimizing only
+# the image dependency leaves the expensive pixel loops unoptimized.
+[profile.dev.package.faxe-engine]
+opt-level = 2
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.dev.package.fast_image_resize]
+opt-level = 3

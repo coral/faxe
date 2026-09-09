@@ -13,7 +13,7 @@ mod sdp;
 mod sip;
 mod tls;
 pub use fax::{
-    AudioFax, FRAME_SAMPLES, FaxEvent, FaxFailure, FaxStage, IfpPacket, PacketFax, TransferStats,
+    AudioFax, FRAME_SAMPLES, FaxEvent, FaxFailure, FaxStage, IfpPacket, PacketFax, PageProgress, TransferStats,
 };
 pub use g711::G711;
 pub use sip::{

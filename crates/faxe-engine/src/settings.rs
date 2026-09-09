@@ -92,13 +92,20 @@ mod tests {
             settings.default_profile
         );
         settings.default_profile = Some(Uuid::new_v4());
+        settings.document_options.contrast = 35;
         settings.write(path)?;
+        assert_eq!(Settings::read(path)?.document_options.contrast, 35);
         assert_eq!(
             Settings::read(path)?.default_profile,
             settings.default_profile
         );
         fs::write(path.join("settings.json"), "{}")?;
         assert_eq!(Settings::read(path)?.default_profile, None);
+        fs::write(
+            path.join("settings.json"),
+            r#"{"document_options":{"paper":"A4","resolution":"Fine","binarization":"Text"}}"#,
+        )?;
+        assert_eq!(Settings::read(path)?.document_options.contrast, 0);
         fs::write(path.join("settings.json"), "broken")?;
         assert!(Settings::read(path).is_err());
         Ok(())

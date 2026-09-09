@@ -1,9 +1,10 @@
 use crate::{Error, Result};
+mod progress;
 use spandsp::{
     fax::FaxState,
     spandsp_sys as sys,
     t30::{T30ModemSupport, T30State},
-    t38_core::{T38DataRateManagement, T38Version},
+    t38_core::{T38Core, T38DataRateManagement, T38Version},
     t38_terminal::T38Terminal,
 };
 use std::{
@@ -14,6 +15,14 @@ use std::{
 };
 
 pub const FRAME_SAMPLES: usize = 160;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PageProgress {
+    /// Zero-based page index. These rows are transmitted, not acknowledged.
+    pub page: u32,
+    pub rows: u32,
+    pub total_rows: u32,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferStats {
@@ -38,6 +47,11 @@ pub enum FaxEvent {
     Stage(FaxStage),
     Negotiated,
     PageAcknowledged(TransferStats),
+    PageProgress(PageProgress),
+    /// Actual outgoing UDPTL bytes, including redundancy and retransmissions.
+    T38Activity {
+        transmitted_bytes: u64,
+    },
     Completed(std::result::Result<TransferStats, FaxFailure>),
 }
 
@@ -82,6 +96,10 @@ struct Callbacks {
     page: Cell<bool>,
     completion: Cell<Option<i32>>,
     packets: RefCell<VecDeque<IfpPacket>>,
+    progress: RefCell<progress::Progress>,
+    t30: Cell<*mut sys::t30_state_t>,
+    monitor: RefCell<Option<T38Core<'static>>>,
+    monitor_sequence: Cell<u16>,
 }
 
 impl Callbacks {
@@ -91,6 +109,9 @@ impl Callbacks {
 
     fn events(&self, t30: &T30State) -> Vec<FaxEvent> {
         let mut events = Vec::new();
+        if let Some(progress) = self.progress.borrow_mut().update() {
+            events.push(FaxEvent::PageProgress(progress));
+        }
         if self.negotiated.replace(false) {
             events.push(FaxEvent::Negotiated);
         }
@@ -219,6 +240,20 @@ impl PacketFax {
 
     fn new(file: &Path, station_id: &str, transmitting: bool) -> Result<Self> {
         let callbacks = Box::<Callbacks>::default();
+        if transmitting {
+            let monitor = unsafe {
+                T38Core::new_raw(
+                    Some(monitor_indicator),
+                    Some(monitor_data),
+                    Some(monitor_missing),
+                    callbacks.pointer(),
+                    None,
+                    std::ptr::null_mut(),
+                )
+            }?;
+            monitor.set_t38_version(T38Version::V0);
+            *callbacks.monitor.borrow_mut() = Some(monitor);
+        }
         // The boxed callback target never moves and is dropped after the terminal.
         let state = unsafe {
             if transmitting {
@@ -330,8 +365,31 @@ fn configure(
         t30.set_phase_b_handler_raw(Some(phase_b), callbacks.pointer());
         t30.set_phase_d_handler_raw(Some(phase_d), callbacks.pointer());
         t30.set_phase_e_handler_raw(Some(phase_e), callbacks.pointer());
+        if transmitting {
+            callbacks.t30.set(t30.as_ptr());
+            sys::t30_set_real_time_frame_handler(
+                t30.as_ptr(),
+                Some(transmit_frame),
+                callbacks.pointer(),
+            );
+        }
     }
     Ok(())
+}
+
+unsafe extern "C" fn transmit_frame(data: *mut c_void, incoming: bool, bytes: *const u8, len: i32) {
+    if bytes.is_null() || len < 3 {
+        return;
+    }
+    let callbacks = unsafe { &*data.cast::<Callbacks>() };
+    let mut stats = sys::t30_stats_t::default();
+    unsafe { sys::t30_get_transfer_statistics(callbacks.t30.get(), &mut stats) };
+    callbacks
+        .progress
+        .borrow_mut()
+        .frame(stats, incoming, unsafe {
+            std::slice::from_raw_parts(bytes, len as usize)
+        });
 }
 
 fn statistics(t30: &T30State) -> TransferStats {
@@ -388,5 +446,54 @@ unsafe extern "C" fn tx_packet(
         payload,
         repetitions: repetitions as u32,
     });
+    drop(packets);
+    if let Some(monitor) = callbacks.monitor.borrow_mut().as_mut() {
+        let sequence = callbacks.monitor_sequence.get();
+        callbacks.monitor_sequence.set(sequence.wrapping_add(1));
+        let payload = unsafe { std::slice::from_raw_parts(bytes, length as usize) };
+        let _ = monitor.rx_ifp_packet(payload, sequence);
+    }
+    0
+}
+
+unsafe extern "C" fn monitor_indicator(
+    _: *mut sys::t38_core_state_t,
+    _: *mut c_void,
+    _: i32,
+) -> i32 {
+    0
+}
+unsafe extern "C" fn monitor_missing(
+    _: *mut sys::t38_core_state_t,
+    _: *mut c_void,
+    _: i32,
+    _: i32,
+) -> i32 {
+    0
+}
+unsafe extern "C" fn monitor_data(
+    _: *mut sys::t38_core_state_t,
+    data: *mut c_void,
+    _: i32,
+    field: i32,
+    bytes: *const u8,
+    len: i32,
+) -> i32 {
+    if (field != sys::t38_field_types_e::T38_FIELD_T4_NON_ECM_DATA as i32
+        && field != sys::t38_field_types_e::T38_FIELD_T4_NON_ECM_SIG_END as i32)
+        || bytes.is_null()
+        || len <= 0
+    {
+        return 0;
+    }
+    let callbacks = unsafe { &*data.cast::<Callbacks>() };
+    let mut stats = sys::t30_stats_t::default();
+    unsafe { sys::t30_get_transfer_statistics(callbacks.t30.get(), &mut stats) };
+    // T.38 carries non-ECM octets MSB first; the image codec consumes LSB first.
+    let bytes: Vec<u8> = unsafe { std::slice::from_raw_parts(bytes, len as usize) }
+        .iter()
+        .map(|byte| byte.reverse_bits())
+        .collect();
+    callbacks.progress.borrow_mut().non_ecm_data(stats, &bytes);
     0
 }

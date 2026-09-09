@@ -214,6 +214,8 @@ struct CallPump {
     direct_retry: bool,
     next_frame: Instant,
     cng_samples: usize,
+    last_activity_report: Instant,
+    reported_bytes: u64,
     receiving: bool,
     ecm: bool,
 }
@@ -230,6 +232,8 @@ impl CallPump {
             direct_retry: false,
             next_frame: Instant::now(),
             cng_samples: 0,
+            last_activity_report: Instant::now(),
+            reported_bytes: 0,
             receiving,
             ecm,
         }
@@ -425,8 +429,20 @@ impl CallPump {
                 for packet in terminal.packets() {
                     network.send(packet)?;
                 }
-                if network.last_received.elapsed() > Duration::from_secs(30) {
-                    return Err(Error::Sip("No incoming T.38 data for 30 seconds".into()));
+                if !self.receiving
+                    && network.transmitted_bytes != self.reported_bytes
+                    && self.last_activity_report.elapsed() >= Duration::from_millis(250)
+                {
+                    self.reported_bytes = network.transmitted_bytes;
+                    self.last_activity_report = now;
+                    progress(FaxEvent::T38Activity {
+                        transmitted_bytes: self.reported_bytes,
+                    });
+                }
+                // SpanDSP's T.30 timers enforce protocol response deadlines;
+                // this watchdog detects inactivity in both media directions.
+                if network.last_activity.elapsed() > Duration::from_secs(30) {
+                    return Err(Error::Sip("No T.38 media activity for 30 seconds".into()));
                 }
                 terminal.events()?
             }

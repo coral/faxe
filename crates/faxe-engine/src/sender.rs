@@ -91,6 +91,12 @@ impl FaxBackend for SipSender {
                     faxe_native::FaxEvent::PageAcknowledged(stats) => {
                         progress(TransmissionProgress::PageAcknowledged(stats.sent_pages))
                     }
+                    faxe_native::FaxEvent::T38Activity { transmitted_bytes } => {
+                        progress(TransmissionProgress::T38Activity { transmitted_bytes })
+                    }
+                    faxe_native::FaxEvent::PageProgress(page) => {
+                        progress(TransmissionProgress::PageProgress(page))
+                    }
                     _ => (),
                 },
                 Ok(faxe_native::SendUpdate::Finished(result)) => {

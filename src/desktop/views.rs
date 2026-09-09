@@ -1,15 +1,13 @@
 use super::{App, Message, Tab};
 use crate::credentials::SecretEdit;
-use faxe_engine::{
-    Binarization, FaxMode, FaxStage, Job, JobState, PaperSize, Resolution, SipTransport,
-};
+use faxe_engine::{Binarization, FaxMode, Job, JobState, PaperSize, Resolution, SipTransport};
 use iced::{
     Element,
     Length::{Fill, FillPortion},
     alignment::Vertical,
     widget::{
         button, checkbox, column, container, image, pick_list, progress_bar, row, rule, scrollable,
-        space, text, text_input,
+        slider, space, text, text_input,
     },
     window,
 };
@@ -84,9 +82,7 @@ impl App {
                     text(page_status(job)).size(13)
                 ]
                 .spacing(12),
-                progress_bar(0.0..=1.0, progress(job))
-                    .girth(6)
-                    .style(move |theme| progress_style(theme, job)),
+                transfer_bar(job, 6),
             ]
             .spacing(9);
             content = content.push(
@@ -263,8 +259,17 @@ impl App {
                 Some(self.options.binarization),
                 Message::Binarization
             ),
+            column![
+                text(format!("Contrast {:+}", self.options.contrast)).size(12),
+                slider(-100..=100, self.options.contrast, Message::Contrast)
+                    .default(0_i16)
+                    .on_release(Message::ApplyContrast)
+                    .width(120),
+            ]
+            .spacing(3),
         ]
-        .spacing(8);
+        .spacing(8)
+        .align_y(Vertical::Center);
         let prepare: Element<'_, Message> = match &self.preparing {
             Some(_) => row![
                 text("Preparing pages…"),
@@ -304,7 +309,10 @@ impl App {
         }
         route = route.push(
             button("Send fax").on_press_maybe(
-                (self.prepared.is_some()
+                (self
+                    .prepared
+                    .as_ref()
+                    .is_some_and(|document| document.options == self.options)
                     && self.selected_profile.is_some()
                     && !self.destination.is_empty()
                     && self.preparing.is_none())
@@ -564,9 +572,7 @@ fn job_row(job: &Job, expanded: bool) -> Element<'_, Message> {
             text(page_status(job)).size(13)
         ]
         .spacing(12),
-        progress_bar(0.0..=1.0, progress(job))
-            .girth(5)
-            .style(move |theme| progress_style(theme, job)),
+        transfer_bar(job, 5),
         row![
             text("Connection  ›  Calling  ›  Negotiation  ›  Sending  ›  Delivery")
                 .size(12)
@@ -613,7 +619,7 @@ fn status(job: &Job) -> String {
 }
 
 fn page_status(job: &Job) -> String {
-    format!(
+    let pages = format!(
         "{} / {} {} confirmed",
         job.state.acknowledged_pages(),
         job.request.document.pages,
@@ -621,25 +627,38 @@ fn page_status(job: &Job) -> String {
             1 => "page",
             _ => "pages",
         }
-    )
+    );
+    if job.page_progress.is_some() {
+        format!(
+            "{:.0}% transmitted · {pages}",
+            (transmitted_fraction(job) * 100.0).floor()
+        )
+    } else {
+        pages
+    }
+}
+
+fn transfer_bar(job: &Job, girth: u32) -> Element<'_, Message> {
+    progress_bar(0.0..=1.0, progress(job))
+        .girth(girth)
+        .style(move |theme| progress_style(theme, job))
+        .into()
+}
+
+fn transmitted_fraction(job: &Job) -> f32 {
+    let acknowledged = job.state.acknowledged_pages() as f32;
+    let transmitted = job.page_progress.map_or(0.0, |page| {
+        page.page as f32 + page.rows as f32 / page.total_rows.max(1) as f32
+    });
+    (acknowledged.max(transmitted) / job.request.document.pages.max(1) as f32).clamp(0.0, 1.0)
 }
 
 fn progress(job: &Job) -> f32 {
-    let pages = job.state.acknowledged_pages() as f32 / job.request.document.pages.max(1) as f32;
     match job.state {
         JobState::Succeeded { .. } => 1.0,
         JobState::Queued => 0.0,
-        _ => match job.steps.last().map(|s| s.stage) {
-            Some(FaxStage::Connecting | FaxStage::Securing) => 0.08,
-            Some(FaxStage::Registering) => 0.16,
-            Some(FaxStage::Calling) => 0.25,
-            Some(FaxStage::Ringing) => 0.32,
-            Some(FaxStage::Connected) => 0.4,
-            Some(FaxStage::OfferingT38 | FaxStage::FallingBack | FaxStage::Negotiating) => 0.5,
-            Some(FaxStage::SendingT38 | FaxStage::SendingG711) => 0.6 + 0.35 * pages,
-            Some(FaxStage::Confirming) => 0.97,
-            None => pages,
-        },
+        // Keep completion distinct from transmitting the last row.
+        _ => transmitted_fraction(job).min(0.99),
     }
 }
 

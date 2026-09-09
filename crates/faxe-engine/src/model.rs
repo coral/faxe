@@ -237,6 +237,9 @@ pub struct DocumentOptions {
     pub paper: PaperSize,
     pub resolution: Resolution,
     pub binarization: Binarization,
+    /// Contrast adjustment in percent, from -100 to 100. Zero preserves source tones.
+    #[serde(default)]
+    pub contrast: i16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -331,6 +334,11 @@ pub struct Job {
     pub retry_of: Option<Uuid>,
     #[serde(default)]
     pub steps: Vec<JobStep>,
+    /// Outgoing UDPTL wire bytes; this does not imply acknowledged delivery.
+    #[serde(default)]
+    pub transmitted_bytes: u64,
+    #[serde(default)]
+    pub page_progress: Option<crate::PageProgress>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

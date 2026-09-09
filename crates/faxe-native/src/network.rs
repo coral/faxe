@@ -288,7 +288,8 @@ pub(crate) struct PacketNetwork {
     history: VecDeque<Vec<u8>>,
     receiver: RedundancyReceiver,
     max_datagram: usize,
-    pub last_received: Instant,
+    pub last_activity: Instant,
+    pub transmitted_bytes: u64,
 }
 
 impl PacketNetwork {
@@ -310,7 +311,8 @@ impl PacketNetwork {
             history: VecDeque::new(),
             receiver: RedundancyReceiver::default(),
             max_datagram,
-            last_received: Instant::now(),
+            last_activity: Instant::now(),
+            transmitted_bytes: 0,
         })
     }
 
@@ -340,6 +342,13 @@ impl PacketNetwork {
         };
         for _ in 0..packet.repetitions.clamp(1, 6) {
             self.socket.send_to(&encoded, self.peer.address)?;
+            self.transmitted_bytes += encoded.len() as u64;
+        }
+        // T.38 is half duplex: transmitting a page can legitimately leave RX
+        // silent for more than 30 seconds. Only T30_DATA extends the watchdog
+        // on TX; periodic indicators (including no-signal) are not progress.
+        if packet.payload.first().is_some_and(|byte| byte & 0x40 != 0) {
+            self.last_activity = Instant::now();
         }
         tracing::trace!(
             direction = "TX",
@@ -385,8 +394,11 @@ impl PacketNetwork {
                         delivered_ifp = recovered.len(),
                         "UDPTL packet"
                     );
+                    // Duplicate datagrams must not keep a stalled call alive.
+                    if !recovered.is_empty() {
+                        self.last_activity = Instant::now();
+                    }
                     result.extend(recovered);
-                    self.last_received = Instant::now();
                 }
                 Err(error) => {
                     tracing::debug!(%error, bytes = size, "Discarding malformed UDPTL packet")
@@ -394,5 +406,62 @@ impl PacketNetwork {
             }
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn t38_watchdog_tracks_data_but_not_outgoing_idle_indicators() -> Result<()> {
+        let socket = DatagramSocket::new(UdpSocket::bind("127.0.0.1:0")?)?;
+        let peer = UdpSocket::bind("127.0.0.1:0")?;
+        let mut network = PacketNetwork::new(&socket, peer.local_addr()?, 400, false, None)?;
+        let stale = Instant::now() - Duration::from_secs(31);
+        network.last_activity = stale;
+        network.send(IfpPacket {
+            payload: vec![0],
+            repetitions: 3,
+        })?;
+        assert_eq!(network.last_activity, stale, "no-signal is not TX progress");
+        assert!(network.last_activity.elapsed() > Duration::from_secs(30));
+        // IFP v0: T30_DATA with one HDLC payload octet.
+        network.send(IfpPacket {
+            payload: vec![0xc8, 1, 0x80, 0, 0, 0xff],
+            repetitions: 1,
+        })?;
+        assert!(
+            network.last_activity > stale,
+            "active TX must prevent a false RX timeout"
+        );
+        assert!(network.transmitted_bytes > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn t38_duplicate_packets_do_not_reset_watchdog() -> Result<()> {
+        let local = UdpSocket::bind("127.0.0.1:0")?;
+        local.set_nonblocking(true)?;
+        let address = local.local_addr()?;
+        let socket = DatagramSocket::new(local)?;
+        let peer = UdpSocket::bind("127.0.0.1:0")?;
+        let mut network = PacketNetwork::new(&socket, peer.local_addr()?, 400, false, None)?;
+        let bytes = UdptlPacket::with_redundancy(0, vec![0], vec![]).encode();
+        peer.send_to(&bytes, address)?;
+        assert_eq!(network.receive()?.len(), 1);
+        let stale = Instant::now() - Duration::from_secs(31);
+        network.last_activity = stale;
+        peer.send_to(&bytes, address)?;
+        assert!(network.receive()?.is_empty());
+        assert_eq!(network.last_activity, stale);
+        peer.send_to(
+            &UdptlPacket::with_redundancy(1, vec![0], vec![]).encode(),
+            address,
+        )?;
+        assert_eq!(network.receive()?.len(), 1);
+        assert!(network.last_activity > stale);
+        Ok(())
     }
 }

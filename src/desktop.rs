@@ -7,7 +7,7 @@ use crate::{
 use faxe_engine::{
     Binarization, Cancellation, Destination, DocumentInput, DocumentOptions, Engine, EngineEffect,
     EngineHandle, EngineRuntime, EngineView, FaxMode, FaxRequest, Job, PaperSize, PreparedDocument,
-    Resolution, Settings, SipProfile, SipSender, SipTransport, Uuid,
+    PreviewSource, Resolution, Settings, SipProfile, SipSender, SipTransport, Uuid,
 };
 use iced::{Subscription, Task, window};
 use std::{
@@ -34,7 +34,8 @@ pub enum Message {
     Effect(EngineEffect),
     QueueChanged(Result<Job, String>),
     QueueCleared(Result<usize, String>),
-    PreviewLoaded(Uuid, u32, Result<iced::widget::image::Handle, String>),
+    PreviewSourceLoaded(Uuid, u32, Result<Arc<PreviewSource>, String>),
+    TonePreviewLoaded(Uuid, u32, u64, Result<iced::widget::image::Handle, String>),
     Tray(tray::Action),
     Tick,
     Animate(Instant),
@@ -57,6 +58,9 @@ pub enum Message {
     Paper(PaperSize),
     Resolution(Resolution),
     Binarization(Binarization),
+    Contrast(i16),
+    ContrastSettled(u64),
+    ApplyContrast,
     Prepare,
     Prepared(u64, Result<PreparedDocument, String>),
     CancelPreparation,
@@ -102,6 +106,10 @@ pub struct App {
     operation: u64,
     profile_revision: u64,
     preview_image: Option<iced::widget::image::Handle>,
+    preview_source: Option<Arc<PreviewSource>>,
+    preview_revision: u64,
+    preview_rendering: bool,
+    contrast_change: Option<(Instant, u64)>,
     engine: Option<EngineHandle>,
     snapshot: Arc<EngineView>,
     window: Option<window::Id>,
@@ -236,6 +244,10 @@ impl App {
             operation: 0,
             profile_revision: 0,
             preview_image: None,
+            preview_source: None,
+            preview_revision: 0,
+            preview_rendering: false,
+            contrast_change: None,
             engine: None,
             snapshot: Arc::new(EngineView::default()),
             window: None,
@@ -296,6 +308,14 @@ impl App {
             }
             _ => None,
         })];
+        if let Some(change) = self.contrast_change {
+            subscriptions.push(Subscription::run_with(change, |&(at, revision)| {
+                iced::futures::stream::once(async move {
+                    tokio::time::sleep_until((at + Duration::from_millis(350)).into()).await;
+                    Message::ContrastSettled(revision)
+                })
+            }));
+        }
         if self.progress_visible
             && let Some(at) = self.finished_at
         {
@@ -530,13 +550,13 @@ impl App {
             Message::Files(paths) => {
                 if self.preparing.is_none() && !paths.is_empty() {
                     self.paths.extend(paths);
-                    self.prepared = None;
+                    self.invalidate_document();
                 }
             }
             Message::Remove(index) => {
                 if self.preparing.is_none() && index < self.paths.len() {
                     self.paths.remove(index);
-                    self.prepared = None;
+                    self.invalidate_document();
                 }
             }
             Message::Move(index, offset) => {
@@ -546,7 +566,7 @@ impl App {
                     && target < self.paths.len()
                 {
                     self.paths.swap(index, target);
-                    self.prepared = None;
+                    self.invalidate_document();
                 }
             }
             Message::Destination(value) => self.destination = value,
@@ -559,23 +579,53 @@ impl App {
             Message::Paper(value) => {
                 if self.preparing.is_none() {
                     self.options.paper = value;
-                    self.prepared = None;
+                    self.invalidate_document();
                     return self.save_settings();
                 }
             }
             Message::Resolution(value) => {
                 if self.preparing.is_none() {
                     self.options.resolution = value;
-                    self.prepared = None;
+                    self.invalidate_document();
                     return self.save_settings();
                 }
             }
             Message::Binarization(value) => {
                 if self.preparing.is_none() {
                     self.options.binarization = value;
-                    self.prepared = None;
-                    return self.save_settings();
+                    let preview = self.refresh_preview();
+                    let apply = self.update(Message::ApplyContrast);
+                    return Task::batch([preview, apply]);
                 }
+            }
+            Message::Contrast(value) => {
+                if self.preparing.is_none() {
+                    self.options.contrast = value.clamp(-100, 100);
+                    let preview = self.refresh_preview();
+                    self.contrast_change = Some((Instant::now(), self.preview_revision));
+                    return preview;
+                }
+            }
+            Message::ContrastSettled(revision) => {
+                if self
+                    .contrast_change
+                    .is_some_and(|(_, current)| current == revision)
+                {
+                    return self.update(Message::ApplyContrast);
+                }
+            }
+            Message::ApplyContrast => {
+                self.contrast_change = None;
+                let settings = self.save_settings();
+                if self
+                    .prepared
+                    .as_ref()
+                    .is_some_and(|document| document.options != self.options)
+                {
+                    let prepare = self.update(Message::Prepare);
+                    return Task::batch([settings, prepare]);
+                }
+                return settings;
             }
             Message::SaveDestination => {
                 if let (Some(engine), Some(profile)) = (self.engine.clone(), &self.selected_profile)
@@ -622,7 +672,7 @@ impl App {
                     self.operation += 1;
                     let operation = self.operation;
                     self.preparing = Some(cancellation.clone());
-                    self.prepared = None;
+                    let original = self.prepared.as_ref().map(|document| document.id);
                     self.notice = None;
                     let input = DocumentInput {
                         paths: self.paths.clone(),
@@ -630,10 +680,15 @@ impl App {
                     };
                     return Task::perform(
                         async move {
-                            engine
-                                .prepare(input, cancellation)
-                                .await
-                                .map_err(|error| error.to_string())
+                            match original {
+                                Some(id) => {
+                                    engine
+                                        .adjust_document(id, input.options, cancellation)
+                                        .await
+                                }
+                                None => engine.prepare(input, cancellation).await,
+                            }
+                            .map_err(|error| error.to_string())
                         },
                         move |result| Message::Prepared(operation, result),
                     );
@@ -646,8 +701,15 @@ impl App {
                 self.preparing = None;
                 match result {
                     Ok(document) => {
+                        let adjusting = self.prepared.is_some();
                         self.prepared = Some(document);
-                        self.preview = 1;
+                        if adjusting && self.preview_source.is_some() {
+                            // The cached grayscale page is unchanged by tone edits.
+                            return self.refresh_preview();
+                        }
+                        if !adjusting {
+                            self.preview = 1;
+                        }
                         return self.load_preview();
                     }
                     Err(error) => self.notice = Some(error),
@@ -662,13 +724,16 @@ impl App {
                 self.preview = page;
                 return self.load_preview();
             }
-            Message::PreviewLoaded(id, page, result) => {
+            Message::PreviewSourceLoaded(id, page, result) => {
                 if !self.closing
                     && self.prepared.as_ref().is_some_and(|d| d.id == id)
                     && self.preview == page
                 {
                     match result {
-                        Ok(image) => self.preview_image = Some(image),
+                        Ok(source) => {
+                            self.preview_source = Some(source);
+                            return self.refresh_preview();
+                        }
                         Err(error) => {
                             tracing::error!(document_id = %id, page, %error, "Document preview failed");
                             self.notice = Some(error);
@@ -676,9 +741,28 @@ impl App {
                     }
                 }
             }
+            Message::TonePreviewLoaded(id, page, revision, result) => {
+                self.preview_rendering = false;
+                if self
+                    .prepared
+                    .as_ref()
+                    .is_some_and(|document| document.id == id)
+                    && self.preview == page
+                    && self.preview_revision == revision
+                {
+                    match result {
+                        Ok(image) => self.preview_image = Some(image),
+                        Err(error) => self.notice = Some(error),
+                    }
+                } else {
+                    return self.render_preview();
+                }
+            }
             Message::Enqueue => {
                 if let (Some(engine), Some(profile), Some(document)) =
                     (self.engine.clone(), &self.selected_profile, &self.prepared)
+                    && self.preparing.is_none()
+                    && document.options == self.options
                 {
                     let request = FaxRequest {
                         profile_id: profile.id,
@@ -940,23 +1024,66 @@ impl App {
     }
     fn load_preview(&mut self) -> Task<Message> {
         self.preview_image = None;
+        self.preview_source = None;
+        self.preview_revision += 1;
         if let (Some(engine), Some(document)) = (self.engine.clone(), self.prepared.as_ref()) {
             let id = document.id;
             let page = self.preview;
             Task::perform(
                 async move {
-                    let preview = engine.preview(id, page).await.map_err(|e| e.to_string())?;
-                    Ok(iced::widget::image::Handle::from_rgba(
-                        preview.width,
-                        preview.height,
-                        preview.pixels,
-                    ))
+                    tokio::task::spawn_blocking(move || {
+                        engine.documents().preview_source(id, page).map(Arc::new)
+                    })
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .map_err(|error| error.to_string())
                 },
-                move |result| Message::PreviewLoaded(id, page, result),
+                move |result| Message::PreviewSourceLoaded(id, page, result),
             )
         } else {
             Task::none()
         }
+    }
+
+    fn invalidate_document(&mut self) {
+        self.prepared = None;
+        self.preview_source = None;
+        self.preview_image = None;
+        self.preview_revision += 1;
+        self.contrast_change = None;
+    }
+
+    fn refresh_preview(&mut self) -> Task<Message> {
+        self.preview_revision += 1;
+        self.render_preview()
+    }
+
+    fn render_preview(&mut self) -> Task<Message> {
+        if self.preview_rendering {
+            return Task::none();
+        }
+        let (Some(document), Some(source)) = (&self.prepared, self.preview_source.clone()) else {
+            return Task::none();
+        };
+        self.preview_rendering = true;
+        let (id, page, revision) = (document.id, self.preview, self.preview_revision);
+        let options = self.options;
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let preview = source.render(options.binarization, options.contrast)?;
+                    Ok::<_, faxe_engine::Error>(iced::widget::image::Handle::from_rgba(
+                        preview.width,
+                        preview.height,
+                        preview.pixels,
+                    ))
+                })
+                .await
+                .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())
+            },
+            move |result| Message::TonePreviewLoaded(id, page, revision, result),
+        )
     }
     fn receiver_label(&self) -> String {
         let status = &self.snapshot.receiver_status;
@@ -1021,6 +1148,58 @@ pub fn theme() -> iced::Theme {
             danger: iced::color!(0xE59A9A),
         },
     )
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn stale_slider_results_and_idle_events_do_not_replace_newer_edits() {
+        let (mut app, _) = App::boot();
+        let id = Uuid::new_v4();
+        app.prepared = Some(PreparedDocument {
+            id,
+            pages: 2,
+            source_names: vec!["image.png".into()],
+            options: DocumentOptions::default(),
+        });
+        app.preview_rendering = true;
+        let old_revision = app.preview_revision;
+        let _ = app.update(Message::Contrast(25));
+        let revision = app.preview_revision;
+        let _ = app.update(Message::Contrast(50));
+        assert!(app.preview_rendering);
+        let _ = app.update(Message::ContrastSettled(revision));
+        assert_eq!(app.contrast_change.unwrap().1, app.preview_revision);
+        let image = iced::widget::image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]);
+        let _ = app.update(Message::TonePreviewLoaded(
+            id,
+            1,
+            old_revision,
+            Ok(image.clone()),
+        ));
+        assert!(app.preview_image.is_none());
+        assert!(!app.preview_rendering);
+        let _ = app.update(Message::TonePreviewLoaded(
+            id,
+            1,
+            app.preview_revision,
+            Ok(image.clone()),
+        ));
+        assert!(app.preview_image.is_some());
+        app.preview = 2;
+        app.preview_image = None;
+        let _ = app.update(Message::TonePreviewLoaded(
+            id,
+            1,
+            app.preview_revision,
+            Ok(image),
+        ));
+        assert!(app.preview_image.is_none());
+        app.invalidate_document();
+        assert!(app.prepared.is_none() && app.contrast_change.is_none());
+    }
 }
 
 fn open_window() -> Task<Message> {

@@ -244,6 +244,7 @@ async fn run(arguments: Arguments) -> Result<()> {
                     true => Binarization::Photo,
                     false => Binarization::Text,
                 },
+                ..DocumentOptions::default()
             };
             let document = documents.prepare(
                 DocumentInput {

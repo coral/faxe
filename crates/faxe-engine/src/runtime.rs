@@ -325,6 +325,30 @@ impl EngineHandle {
         input: DocumentInput,
         cancellation: Cancellation,
     ) -> Result<PreparedDocument> {
+        self.prepare_document(cancellation, move |documents, cancellation| {
+            tracing::info!(sources = input.paths.len(), "Preparing document");
+            documents.prepare(input, cancellation, |_| {})
+        })
+        .await
+    }
+
+    pub async fn adjust_document(
+        &self,
+        id: Uuid,
+        options: crate::DocumentOptions,
+        cancellation: Cancellation,
+    ) -> Result<PreparedDocument> {
+        self.prepare_document(cancellation, move |documents, cancellation| {
+            documents.adjust(id, options, cancellation, |_| {})
+        })
+        .await
+    }
+
+    async fn prepare_document(
+        &self,
+        cancellation: Cancellation,
+        prepare: impl FnOnce(Documents, &Cancellation) -> Result<PreparedDocument> + Send + 'static,
+    ) -> Result<PreparedDocument> {
         let (send, recv) = oneshot::channel();
         self.request(move |a| {
             if a.preparing.is_some() {
@@ -335,8 +359,7 @@ impl EngineHandle {
             a.preparing = Some(cancellation.clone());
             let documents = a.documents.clone();
             let result = a.spawn("faxe-document", move || {
-                tracing::info!(sources = input.paths.len(), "Preparing document");
-                let result = documents.prepare(input, &cancellation, |_| {});
+                let result = prepare(documents, &cancellation);
                 match &result {
                     Ok(document) => tracing::info!(
                         document_id = %document.id,
@@ -1113,6 +1136,10 @@ fn native_error(error: faxe_native::Error) -> Error {
 
 impl Actor {
     fn progress(&mut self, id: Uuid, progress: TransmissionProgress) -> Result<()> {
+        let activity_only = matches!(
+            progress,
+            TransmissionProgress::T38Activity { .. } | TransmissionProgress::PageProgress(_)
+        );
         let Some((job, _)) = self.active.as_mut().filter(|(job, _)| job.id == id) else {
             return Ok(());
         };
@@ -1145,6 +1172,23 @@ impl Actor {
                 }
             }
             TransmissionProgress::Stage(_) => job.state.clone(),
+            TransmissionProgress::T38Activity { transmitted_bytes } => {
+                job.transmitted_bytes = job.transmitted_bytes.max(transmitted_bytes);
+                job.state.clone()
+            }
+            TransmissionProgress::PageProgress(page) => {
+                if page.total_rows > 0
+                    && page.rows <= page.total_rows
+                    && job.page_progress.is_none_or(|old| {
+                        page.page > old.page || (page.page == old.page
+                            && page.rows as u64 * old.total_rows as u64
+                                >= old.rows as u64 * page.total_rows as u64)
+                    })
+                {
+                    job.page_progress = Some(page);
+                }
+                job.state.clone()
+            }
             TransmissionProgress::PageAcknowledged(acknowledged_pages) => {
                 if acknowledged_pages >= job.request.document.pages
                     && job
@@ -1166,7 +1210,7 @@ impl Actor {
         if *job == previous {
             return Ok(());
         }
-        if !self.clear_active {
+        if !self.clear_active && !activity_only {
             self.store.update_job(job)?;
         }
         let job = job.clone();
