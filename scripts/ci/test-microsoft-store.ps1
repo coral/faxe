@@ -1,5 +1,6 @@
 # Offline integration checks: fake Store CLI and a minimal bundle; no credentials.
 $ErrorActionPreference = 'Stop'
+$savedExitCode = $global:LASTEXITCODE
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
 $null = New-Item -ItemType Directory -Path $temporary
 $savedEnvironment = @{}
@@ -92,4 +93,7 @@ try {
     }
     Remove-Item Function:msstore
     Remove-Variable -Scope Global -Name faxeStoreTest*
+    # GitHub's pwsh wrapper exits with LASTEXITCODE. Do not leak the deliberately
+    # simulated CLI failure from the tests into the runner's step result.
+    $global:LASTEXITCODE = $savedExitCode
 }
