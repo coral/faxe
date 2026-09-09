@@ -669,7 +669,10 @@ impl App {
                 {
                     match result {
                         Ok(image) => self.preview_image = Some(image),
-                        Err(error) => self.notice = Some(error),
+                        Err(error) => {
+                            tracing::error!(document_id = %id, page, %error, "Document preview failed");
+                            self.notice = Some(error);
+                        }
                     }
                 }
             }

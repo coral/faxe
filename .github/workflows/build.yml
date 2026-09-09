@@ -166,6 +166,9 @@ jobs:
         run: ./scripts/ci/setup-windows.ps1
       - name: Compile workspace
         run: cargo build --workspace --release --locked
+      - name: Test Windows document preparation
+        if: runner.os == 'Windows'
+        run: cargo test -p faxe-engine --lib --release --locked document::tests
       - name: Install cargo-bundle
         if: runner.os != 'Windows'
         run: cargo install cargo-bundle --version 0.11.0 --locked
@@ -180,7 +183,9 @@ jobs:
           FAXE_STORE_IDENTITY: ${{ vars.FAXE_STORE_IDENTITY }}
           FAXE_STORE_PUBLISHER: ${{ vars.FAXE_STORE_PUBLISHER }}
           FAXE_STORE_DISPLAY_NAME: ${{ vars.FAXE_STORE_DISPLAY_NAME }}
-        run: ./scripts/ci/package-windows.ps1
+        run: |
+          ./scripts/ci/test-windows-runtime.ps1
+          ./scripts/ci/package-windows.ps1
       - name: Upload packages
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:

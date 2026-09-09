@@ -1,22 +1,24 @@
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 Set-StrictMode -Version Latest
+. "$PSScriptRoot/windows-runtime.ps1"
 
 $metadata = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
 $version = ($metadata.packages | Where-Object name -eq 'faxe-desktop').version
 $build = Join-Path $pwd "target\$env:CARGO_BUILD_TARGET\release"
-$stage = Join-Path $pwd "packaging\windows\stage\$env:PACKAGE_ARCH"
+# A fresh directory also prevents DLLs from an earlier package surviving a rerun.
+$stage = Join-Path $pwd "packaging\windows\stage\$env:PACKAGE_ARCH\$([guid]::NewGuid())"
 $dist = Join-Path $pwd 'dist'
 New-Item -ItemType Directory -Force $stage, $dist | Out-Null
-Copy-Item "$build\faxe.exe", "$build\faxe-cli.exe" $stage
-Copy-Item "$env:FAXE_VCPKG_PREFIX\bin\*.dll" $stage
 $redist = @(Get-ChildItem "$env:VCToolsRedistDir\$env:PACKAGE_ARCH\Microsoft.VC*.CRT" -Directory)
 if ($redist.Count -ne 1) { throw 'Expected one MSVC CRT redistributable directory' }
-Copy-Item "$($redist[0].FullName)\*.dll" $stage
 $pdfium = @(Get-ChildItem "$build\build\faxe-engine-*\out\pdfium-8044\.verified")
 if ($pdfium.Count -ne 1) { throw 'Expected one PDFium artifact' }
 $pdfiumRoot = $pdfium[0].Directory.FullName
-Copy-Item "$pdfiumRoot\bin\pdfium.dll" $stage
+# PDFium is loaded dynamically, so seed it explicitly before following imports.
+Copy-WindowsRuntime -Binaries @("$build\faxe.exe", "$build\faxe-cli.exe", "$pdfiumRoot\bin\pdfium.dll") `
+    -SearchDirectories @("$env:FAXE_VCPKG_PREFIX\bin", $redist[0].FullName, "$pdfiumRoot\bin") `
+    -Destination $stage
 Copy-Item LICENSE $stage
 Copy-Item licenses "$stage\licenses" -Recurse
 Copy-Item "$pdfiumRoot\licenses" "$stage\licenses\pdfium-artifact" -Recurse

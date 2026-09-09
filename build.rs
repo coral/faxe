@@ -74,7 +74,12 @@ fn main() {
             .replace('\\', "\\\\");
         fs::write(&resource, format!("1 ICON \"{ico}\"\n")).unwrap();
         let compiled = out.join("faxe.res");
-        let status = Command::new("rc.exe")
+        println!("cargo:rerun-if-env-changed=FAXE_BUILD_PATH");
+        let mut rc = Command::new("rc.exe");
+        if let Some(path) = env::var_os("FAXE_BUILD_PATH") {
+            rc.env("PATH", path);
+        }
+        let status = rc
             .arg("/nologo")
             .arg("/fo")
             .arg(&compiled)

@@ -24,6 +24,22 @@ verbose and can affect timing; enable it only while diagnosing a problem.
 
 ## Development dependencies
 
+On Windows, install Rust with the native MSVC toolchain, Visual Studio 2022
+C++ build tools (including the Windows SDK and CMake tools), and standalone
+LLVM (`winget install --id LLVM.LLVM --exact`). Then run from PowerShell:
+
+```powershell
+./scripts/ci/setup-windows.ps1 -Local
+cargo run
+```
+
+Setup initializes PJPROJECT and builds the same pinned TIFF/JPEG dependencies
+as CI. It writes an ignored, machine-specific `.cargo/config.toml` so subsequent
+`cargo run` commands work in ordinary terminals. Native C code requires Clang;
+the default MSVC `cl.exe` fails to compile SpanDSP. Rerun setup after moving the
+checkout or updating native tools. Downloads and native dependency builds can
+take several minutes on the first run.
+
 Packaging configurations for macOS 15+ arm64, Windows Store x64/arm64, Linux
 AppImage x64/arm64 and Flatpak are in [packaging/README.md](packaging/README.md).
 GitHub Actions builds and packages these targets. Builds on `master` also sign

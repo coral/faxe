@@ -33,10 +33,17 @@ tools. Windows imports the native Visual Studio build environment, uses Clang
 with the MSVC ABI, and builds the pinned vcpkg manifest in `windows/vcpkg.json`.
 No SpanDSP dependency sources or build scripts are patched.
 
+Windows packaging follows normal and delay-load PE imports with LLVM's
+`llvm-readobj`, starting from both executables and the dynamically loaded PDFium
+DLL. Only required vcpkg and MSVC runtime DLLs are copied; unknown non-system
+imports fail packaging. Each run uses a fresh staging directory so obsolete DLLs
+cannot leak into the ZIP or MSIX.
+
 The build command is `cargo build --workspace --release --locked` with the
 matrix target in `CARGO_BUILD_TARGET`. `scripts/ci/` then packages those outputs.
 The desktop and headless CLI are included.
-Ordinary local development still starts with `cargo run`.
+On Windows, first run `./scripts/ci/setup-windows.ps1 -Local` as described in
+the root README. After setup, ordinary local development starts with `cargo run`.
 
 macOS uses cargo-bundle 0.11.0, collects non-system Homebrew dylibs into
 `Contents/Frameworks`, fixes their library paths and ad-hoc signs the result.

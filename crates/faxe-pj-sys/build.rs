@@ -11,6 +11,7 @@ const LIBRARIES: &[(&str, &str)] = &[
 ];
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=FAXE_BUILD_PATH");
     for path in ["build.rs", "wrapper.h", "native", "pjproject"] {
         println!("cargo:rerun-if-changed={path}");
     }
@@ -143,6 +144,9 @@ fn main() {
 }
 
 fn run(command: &mut Command) {
+    if let Some(path) = env::var_os("FAXE_BUILD_PATH") {
+        command.env("PATH", path);
+    }
     let output = command
         .output()
         .unwrap_or_else(|error| panic!("{command:?}: {error}"));

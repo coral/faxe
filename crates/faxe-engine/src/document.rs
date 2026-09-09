@@ -219,6 +219,7 @@ impl Documents {
         }
         writer.flush()?;
         writer.get_ref().sync_all()?;
+        drop(writer);
         cancellation.check()?;
         let document = PreparedDocument {
             id: Uuid::new_v4(),
@@ -238,6 +239,8 @@ impl Documents {
         let mut metadata = File::create(staging.path().join("document.json"))?;
         serde_json::to_writer_pretty(&mut metadata, &document)?;
         metadata.sync_all()?;
+        // Windows cannot rename the staging directory with files still open in it.
+        drop(metadata);
         fs::rename(staging.path(), self.root.join(document.id.to_string()))?;
         Ok(document)
     }
@@ -457,6 +460,11 @@ mod tests {
             }
         }
         assert_eq!(documents.load(document.id)?.pages, 2);
+        for page in 1..=2 {
+            let preview = image::open(documents.preview_path(document.id, page))?;
+            assert_eq!(preview.width(), 500);
+        }
+        assert_eq!(fs::read_dir(directory.path().join("spool"))?.count(), 1);
         Ok(())
     }
 }

@@ -335,7 +335,17 @@ impl EngineHandle {
             a.preparing = Some(cancellation.clone());
             let documents = a.documents.clone();
             let result = a.spawn("faxe-document", move || {
+                tracing::info!(sources = input.paths.len(), "Preparing document");
                 let result = documents.prepare(input, &cancellation, |_| {});
+                match &result {
+                    Ok(document) => tracing::info!(
+                        document_id = %document.id,
+                        pages = document.pages,
+                        "Document prepared"
+                    ),
+                    Err(Error::Cancelled) => tracing::info!("Document preparation cancelled"),
+                    Err(error) => tracing::error!(%error, "Document preparation failed"),
+                }
                 Box::new(move |a| {
                     a.preparing = None;
                     let _ = send.send(result);
