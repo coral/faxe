@@ -76,8 +76,10 @@ code allowed to run in the signing job can access its credentials.
 
 Linux uses cargo-bundle to create its AppDir, then a checksum-verified
 linuxdeploy release collects shared libraries and creates the final AppImage.
-Builds on Ubuntu 24.04 require a compatible host libc; they do not claim support
-for older Linux distributions. Native notices are copied into the package.
+Both AppImage architectures compile and package inside Ubuntu 22.04 containers
+on the runners above, keeping the glibc baseline at 2.35 for compatibility with
+Ubuntu 22.04, Debian 12 and newer distributions. Linux build caches are scoped
+to that container baseline. Native notices are copied into the package.
 
 PDFium is pinned to chromium/8044, including Windows ARM64. Packaged binaries
 load PDFium from the application bundle; development builds retain the embedded
