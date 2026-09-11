@@ -342,5 +342,8 @@ jobs:
     needs: release
     if: github.repository == 'coral/faxe' && startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request'
     uses: ./.github/workflows/microsoft-store.yml
+    # Required for the called job to resolve its ms environment secrets.
+    # https://github.com/actions/runner/issues/4453
+    secrets: inherit
     with:
       submit: true

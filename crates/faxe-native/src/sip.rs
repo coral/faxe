@@ -195,10 +195,13 @@ pub fn send(
 enum Attempt {
     NotStarted,
     Waiting {
+        kind: Kind,
         cseq: i32,
         since: Instant,
         cancelling: bool,
+        media_ready: bool,
     },
+    Accepted,
     Rejected,
 }
 enum FaxMedia {
@@ -267,7 +270,12 @@ impl CallPump {
                 Event::Connected => {
                     progress(FaxEvent::Stage(FaxStage::Connected));
                     tracing::debug!("SIP dialog confirmed");
-                    self.connected.get_or_insert_with(Instant::now);
+                    if self.connected.is_none() {
+                        let now = Instant::now();
+                        self.connected = Some(now);
+                        // Time spent waiting for an answer is not a media clock stall.
+                        self.next_frame = now;
+                    }
                 }
                 Event::Disconnected(code, reason) => {
                     tracing::debug!(code, %reason, "SIP dialog disconnected");
@@ -299,7 +307,21 @@ impl CallPump {
                 Event::Media(description) => {
                     let negotiated = sdp::remote(&description)?;
                     tracing::debug!(?negotiated, "Negotiated remote media");
+                    if let Attempt::Waiting {
+                        kind, media_ready, ..
+                    } = &mut self.attempt
+                    {
+                        *media_ready = negotiated.kind() == *kind;
+                    }
                     if self.remote.as_ref() == Some(&negotiated) {
+                        continue;
+                    }
+                    if let (Some(network), RemoteMedia::Audio { address, codec }) =
+                        (&mut self.audio, &negotiated)
+                        && !matches!(self.fax, Some(FaxMedia::Packets(_)))
+                    {
+                        network.update_remote(*address, *codec);
+                        self.remote = Some(negotiated);
                         continue;
                     }
                     if self.fax.is_some() {
@@ -341,18 +363,53 @@ impl CallPump {
                 }
                 Event::InviteFinal(cseq, code) => {
                     tracing::debug!(cseq, code, "INVITE transaction final response");
-                    if matches!(self.attempt, Attempt::Waiting { cseq: expected, .. } if expected == cseq)
-                        && code >= 300
+                    if let Attempt::Waiting {
+                        cseq: expected,
+                        kind,
+                        media_ready,
+                        ..
+                    } = self.attempt
+                        && expected == cseq
+                        && code >= 200
                         && !matches!(code, 401 | 407)
                     {
-                        tracing::info!(code, "T.38 offer rejected; continuing with G.711");
-                        self.attempt = Attempt::Rejected;
+                        if kind == Kind::T38
+                            && code >= 300
+                            && matches!(self.remote, Some(RemoteMedia::Audio { .. }))
+                        {
+                            tracing::info!(code, "T.38 offer rejected; continuing with G.711");
+                            self.attempt = Attempt::Rejected;
+                        } else if code < 300 && media_ready {
+                            self.attempt = if kind == Kind::T38 {
+                                Attempt::Accepted
+                            } else {
+                                Attempt::Rejected
+                            };
+                        } else if kind == Kind::T38 {
+                            // A 2xx ends the transaction even when its SDP is unusable.
+                            // Confirm audio with the peer before resuming the fax.
+                            tracing::warn!(code, "T.38 negotiation failed; renegotiating G.711");
+                            progress(FaxEvent::Stage(FaxStage::FallingBack));
+                            let cseq = sip.reinvite(Kind::Audio)?;
+                            self.attempt = Attempt::Waiting {
+                                kind: Kind::Audio,
+                                cseq,
+                                since: Instant::now(),
+                                cancelling: false,
+                                media_ready: false,
+                            };
+                        } else {
+                            return Err(Error::Sip(format!(
+                                "Could not restore G.711 after T.38 negotiation failed (SIP {code})"
+                            )));
+                        }
                     }
                 }
                 Event::MediaError(reason) => {
                     tracing::warn!(%reason, "Media negotiation error");
-                    if !matches!(self.attempt, Attempt::Waiting { .. }) {
-                        return Err(Error::Sip(reason));
+                    match &mut self.attempt {
+                        Attempt::Waiting { media_ready, .. } => *media_ready = false,
+                        _ => return Err(Error::Sip(reason)),
                     }
                 }
                 Event::Registered(..) | Event::Flow(..) => (),
@@ -362,10 +419,41 @@ impl CallPump {
         let Some(answered) = self.connected else {
             return Ok(None);
         };
+        match &mut self.attempt {
+            Attempt::Waiting {
+                kind,
+                cseq,
+                since,
+                cancelling,
+                ..
+            } if since.elapsed() >= Duration::from_secs(5) && !*cancelling => {
+                tracing::warn!(?kind, "Media offer timed out; cancelling re-INVITE");
+                sip.cancel_reinvite(*cseq)?;
+                *cancelling = true;
+            }
+            Attempt::Waiting { since, .. } if since.elapsed() > Duration::from_secs(38) => {
+                return Err(Error::Sip(
+                    "Media re-INVITE did not settle; refusing an ambiguous audio fallback".into(),
+                ));
+            }
+            _ => (),
+        }
         if self.fax.is_none() {
             match self.remote.as_ref() {
+                Some(RemoteMedia::T38 { .. })
+                    if matches!(self.attempt, Attempt::Waiting { .. }) =>
+                {
+                    ()
+                }
                 Some(RemoteMedia::T38 { bit_rate, .. }) => {
-                    let mut terminal = match self.receiving { true => PacketFax::receiver_with_ecm(request.file, request.station_id, self.ecm)?, false => PacketFax::transmitter(request.file, request.station_id)? };
+                    let mut terminal = match self.receiving {
+                        true => PacketFax::receiver_with_ecm(
+                            request.file,
+                            request.station_id,
+                            self.ecm,
+                        )?,
+                        false => PacketFax::transmitter(request.file, request.station_id)?,
+                    };
                     terminal.limit_bit_rate(*bit_rate)?;
                     self.fax = Some(FaxMedia::Packets(terminal));
                     progress(FaxEvent::Stage(FaxStage::Negotiating));
@@ -375,33 +463,52 @@ impl CallPump {
                 Some(RemoteMedia::Audio { .. }) => match request.mode {
                     Mode::T38 => return Err(Error::Sip("Peer did not accept T.38".into())),
                     Mode::G711 => {
-                        self.fax = Some(FaxMedia::Audio(match self.receiving { true => AudioFax::receiver_with_ecm(request.file, request.station_id, self.ecm)?, false => AudioFax::transmitter(request.file, request.station_id)? }));
+                        self.fax = Some(FaxMedia::Audio(match self.receiving {
+                            true => AudioFax::receiver_with_ecm(
+                                request.file,
+                                request.station_id,
+                                self.ecm,
+                            )?,
+                            false => AudioFax::transmitter(request.file, request.station_id)?,
+                        }));
                         set_switch_allowed(false);
                         progress(FaxEvent::Stage(FaxStage::Negotiating));
                     }
                     Mode::Auto => match &mut self.attempt {
-                        Attempt::NotStarted if (self.receiving || answered.elapsed() >= Duration::from_millis(3500)) => {
+                        Attempt::NotStarted
+                            if (self.receiving
+                                || answered.elapsed() >= Duration::from_millis(3500)) =>
+                        {
                             progress(FaxEvent::Stage(FaxStage::OfferingT38));
-                            let cseq = sip.reinvite()?;
-                            self.attempt = Attempt::Waiting { cseq, since: Instant::now(), cancelling: false };
+                            let cseq = sip.reinvite(Kind::T38)?;
+                            self.attempt = Attempt::Waiting {
+                                kind: Kind::T38,
+                                cseq,
+                                since: Instant::now(),
+                                cancelling: false,
+                                media_ready: false,
+                            };
                             tracing::info!("Requesting T.38 upgrade");
                         }
                         Attempt::Rejected => {
                             progress(FaxEvent::Stage(FaxStage::FallingBack));
-                            self.fax = Some(FaxMedia::Audio(match self.receiving { true => AudioFax::receiver_with_ecm(request.file, request.station_id, self.ecm)?, false => AudioFax::transmitter(request.file, request.station_id)? }));
+                            self.fax = Some(FaxMedia::Audio(match self.receiving {
+                                true => AudioFax::receiver_with_ecm(
+                                    request.file,
+                                    request.station_id,
+                                    self.ecm,
+                                )?,
+                                false => AudioFax::transmitter(request.file, request.station_id)?,
+                            }));
                             set_switch_allowed(false);
                             progress(FaxEvent::Stage(FaxStage::Negotiating));
                         }
-                        Attempt::Waiting { since, cancelling, .. } if since.elapsed() >= Duration::from_secs(5) && !*cancelling => {
-                            tracing::warn!("T.38 offer timed out; cancelling re-INVITE before G.711 fallback");
-                            sip.cancel_reinvite()?;
-                            *cancelling = true;
-                        }
-                        Attempt::Waiting { since, .. } if since.elapsed() > Duration::from_secs(38) => return Err(Error::Sip("T.38 re-INVITE did not settle; refusing an ambiguous audio fallback".into())),
                         _ => (),
                     },
                 },
-                None if answered.elapsed() > Duration::from_secs(5) => return Err(Error::Sip("Call connected without usable media".into())),
+                None if answered.elapsed() > Duration::from_secs(5) => {
+                    return Err(Error::Sip("Call connected without usable media".into()));
+                }
                 None => (),
             }
         }
@@ -1049,7 +1156,7 @@ impl Sip {
         }
     }
 
-    fn reinvite(&mut self) -> Result<i32> {
+    fn reinvite(&mut self, kind: Kind) -> Result<i32> {
         SELECTED.set(self.id);
         let offer = CALLBACKS.with(|slot| {
             let mut slot = slot.borrow_mut();
@@ -1057,7 +1164,7 @@ impl Sip {
                 .get_mut(&SELECTED.get())
                 .expect("call callbacks installed");
             callbacks.local.version += 1;
-            callbacks.local.offer(Kind::T38)
+            callbacks.local.offer(kind)
         });
         unsafe {
             let sdp = parse_sdp((*self.inv).pool_prov, &offer)?;
@@ -1077,8 +1184,16 @@ impl Sip {
         }
     }
 
-    fn cancel_reinvite(&mut self) -> Result<()> {
+    fn cancel_reinvite(&mut self, cseq: i32) -> Result<()> {
         unsafe {
+            let transaction = (*self.inv).invite_tsx.as_ref();
+            if transaction.is_none_or(|transaction| {
+                transaction.role != pj::pjsip_role_e_PJSIP_ROLE_UAC
+                    || transaction.cseq != cseq
+                    || transaction.status_code >= 200
+            }) {
+                return Err(Error::Sip("No matching pending re-INVITE to cancel".into()));
+            }
             let mut data = ptr::null_mut();
             check(pj::pjsip_inv_cancel_reinvite(self.inv, &mut data))?;
             if !data.is_null() {

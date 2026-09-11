@@ -51,6 +51,17 @@ impl Playout {
         })
     }
 
+    /// A signaled endpoint change may introduce a new RTP clock and SSRC.
+    /// Retain cumulative quality counters, but discard the previous stream.
+    pub fn reset_stream(&mut self) {
+        self.samples.fill(None);
+        self.anchor = None;
+        self.cursor = 0;
+        self.end = 0;
+        self.next_playout = None;
+        self.started = false;
+    }
+
     pub fn insert(&mut self, timestamp: u32, payload: &[u8], codec: G711, now: Instant) {
         if payload.is_empty() {
             return;

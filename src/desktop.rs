@@ -86,6 +86,7 @@ pub enum Message {
     ReceiveFolder,
     ReceiveFolderSelected(Option<PathBuf>),
     ReceiveEcm(bool),
+    ReceiveMode(FaxMode),
     ReceiveNotifications(bool),
     CancelReception(Uuid),
     RetryExport(Uuid),
@@ -852,6 +853,11 @@ impl App {
                 settings.ecm = ecm;
                 return self.configure_receive(settings);
             }
+            Message::ReceiveMode(mode) => {
+                let mut settings = self.snapshot.receive_settings.clone();
+                settings.mode = mode;
+                return self.configure_receive(settings);
+            }
             Message::ReceiveNotifications(notifications) => {
                 let mut settings = self.snapshot.receive_settings.clone();
                 settings.notifications = notifications;
@@ -1054,8 +1060,7 @@ impl App {
             }
         }
     }
-    fn configure_receive(&mut self, mut settings: faxe_engine::ReceiveSettings) -> Task<Message> {
-        settings.mode = FaxMode::Auto;
+    fn configure_receive(&mut self, settings: faxe_engine::ReceiveSettings) -> Task<Message> {
         if let Some(engine) = self.engine.clone() {
             Task::perform(
                 async move {

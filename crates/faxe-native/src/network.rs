@@ -119,6 +119,8 @@ impl Sockets {
 pub(crate) struct AudioNetwork {
     socket: DatagramSocket,
     peer: Peer,
+    signaled_address: SocketAddr,
+    symmetric: bool,
     mapping: Option<Rc<RefCell<Mapping>>>,
     codec: G711,
     sequence: u16,
@@ -147,6 +149,8 @@ impl AudioNetwork {
         Ok(Self {
             socket,
             peer: Peer::new(address, symmetric),
+            signaled_address: address,
+            symmetric,
             mapping,
             codec,
             sequence: u16::from_be_bytes([random[0], random[1]]),
@@ -158,6 +162,20 @@ impl AudioNetwork {
             last_report: Instant::now(),
             last_received: Instant::now(),
         })
+    }
+
+    pub fn update_remote(&mut self, address: SocketAddr, codec: G711) {
+        tracing::info!(peer = %address, ?codec, "Updating G.711 media endpoint");
+        if address != self.signaled_address {
+            self.signaled_address = address;
+            self.peer = Peer::new(address, self.symmetric);
+            self.source = None;
+            self.playout.reset_stream();
+            self.last_received = Instant::now();
+        }
+        // Keep the fax modem and outgoing RTP clock running across re-INVITEs.
+        // Buffered samples are already decoded, so a codec change needs no reset.
+        self.codec = codec;
     }
 
     pub fn send(&mut self, samples: [i16; FRAME_SAMPLES]) -> Result<()> {
@@ -430,6 +448,80 @@ impl PacketNetwork {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn audio_endpoint_update_preserves_tx_clock_and_accepts_a_new_rx_stream() -> Result<()> {
+        let local = UdpSocket::bind("127.0.0.1:0")?;
+        local.set_nonblocking(true)?;
+        let address = local.local_addr()?;
+        let socket = DatagramSocket::new(local)?;
+        let old_peer = UdpSocket::bind("127.0.0.1:0")?;
+        let new_peer = UdpSocket::bind("127.0.0.1:0")?;
+        old_peer.set_read_timeout(Some(Duration::from_secs(1)))?;
+        new_peer.set_read_timeout(Some(Duration::from_secs(1)))?;
+        let mut network =
+            AudioNetwork::new(&socket, old_peer.local_addr()?, G711::Pcma, false, None, 40)?;
+        let inject = |network: &mut AudioNetwork,
+                      peer: &UdpSocket,
+                      ssrc: u32,
+                      timestamp: u32,
+                      codec: G711|
+         -> Result<()> {
+            let mut packet = vec![0x80, codec.payload_type(), 0, 1];
+            packet.extend(timestamp.to_be_bytes());
+            packet.extend(ssrc.to_be_bytes());
+            packet.extend(codec.encode([1000; FRAME_SAMPLES]));
+            peer.send_to(&packet, address)?;
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut buffer = [0; 2048];
+            while socket.peek_from(&mut buffer).is_err() {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            network.receive_packets()
+        };
+        inject(&mut network, &old_peer, 111, 80_000, G711::Pcma)?;
+        network.send([0; FRAME_SAMPLES])?;
+        let mut old_packet = [0; 172];
+        old_peer.recv(&mut old_packet)?;
+        network.update_remote(new_peer.local_addr()?, G711::Pcma);
+        inject(&mut network, &old_peer, 111, 80_160, G711::Pcma)?;
+        assert_eq!(
+            network.source, None,
+            "the old endpoint must no longer be accepted"
+        );
+        inject(&mut network, &new_peer, 222, 123, G711::Pcma)?;
+        assert_eq!(network.source, Some(222));
+        assert_eq!(
+            network.playout.drain().len(),
+            1,
+            "a new clock must not create a timestamp gap"
+        );
+        network.send([0; FRAME_SAMPLES])?;
+        let mut new_packet = [0; 172];
+        new_peer.recv(&mut new_packet)?;
+        let before = Rtp::parse(&old_packet).unwrap();
+        let after = Rtp::parse(&new_packet).unwrap();
+        assert_eq!(after.ssrc, before.ssrc);
+        assert_eq!(after.sequence, before.sequence.wrapping_add(1));
+        assert_eq!(
+            after.timestamp,
+            before.timestamp.wrapping_add(FRAME_SAMPLES as u32)
+        );
+        network.update_remote(new_peer.local_addr()?, G711::Pcmu);
+        assert_eq!(
+            network.source,
+            Some(222),
+            "codec changes preserve the receive clock"
+        );
+        inject(&mut network, &new_peer, 222, 283, G711::Pcmu)?;
+        let decoded = network.playout.drain();
+        assert_eq!(
+            decoded,
+            vec![G711::Pcmu.decode(G711::Pcmu.encode([1000; FRAME_SAMPLES]))]
+        );
+        Ok(())
+    }
 
     #[test]
     fn t38_watchdog_tracks_data_but_not_outgoing_idle_indicators() -> Result<()> {

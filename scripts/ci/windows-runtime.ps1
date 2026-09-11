@@ -21,6 +21,18 @@ function Get-WindowsImports([string]$Binary) {
     }
 }
 
+function Assert-WindowsSubsystem {
+    param(
+        [Parameter(Mandatory)][string]$Binary,
+        [Parameter(Mandatory)][ValidateSet('WINDOWS_GUI', 'WINDOWS_CUI')][string]$Subsystem
+    )
+    $output = & llvm-readobj.exe --file-headers $Binary
+    if ($LASTEXITCODE -ne 0) { throw "Cannot inspect PE headers: $Binary" }
+    if (($output -join "`n") -notmatch "(?m)^\s*Subsystem: IMAGE_SUBSYSTEM_$Subsystem\s+\(") {
+        throw "Expected $Subsystem subsystem in '$Binary'. The desktop release must launch without a console; faxe-cli must retain console support."
+    }
+}
+
 function Copy-WindowsRuntime {
     param(
         [Parameter(Mandatory)][string[]]$Binaries,

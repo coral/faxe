@@ -25,6 +25,26 @@ enum Scenario {
     PeerUpgrade,
     Direct,
     HangupAfterReceive,
+    DisabledT38Answer,
+    MissingT38Answer,
+    RefusedAudioRestore,
+    G711Move,
+    G711CodecChange,
+}
+
+#[test]
+fn sip_unusable_t38_answers_restore_audio_and_deliver_a_page() -> Result<()> {
+    run_scenarios(&[Scenario::DisabledT38Answer, Scenario::MissingT38Answer])
+}
+
+#[test]
+fn sip_refused_audio_restoration_fails_without_cancelling_a_finished_invite() -> Result<()> {
+    run_scenarios(&[Scenario::RefusedAudioRestore])
+}
+
+#[test]
+fn sip_g711_only_survives_peer_media_updates_and_delivers_a_page() -> Result<()> {
+    run_scenarios(&[Scenario::G711Move, Scenario::G711CodecChange])
 }
 
 #[test]
@@ -340,6 +360,7 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                     station_id: "FAXE TEST",
                     mode: match scenario {
                         Scenario::Direct => faxe_native::Mode::T38,
+                        Scenario::G711Move | Scenario::G711CodecChange => faxe_native::Mode::G711,
                         _ => faxe_native::Mode::Auto,
                     },
                 },
@@ -397,6 +418,8 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
             let mut audio_timestamp = 0_u32;
             let mut saw_authorization = false;
             let mut saw_t38_offer = false;
+            let mut restored_audio = false;
+            let mut audio_codec = G711::Pcma;
             let mut received_pages = 0;
             let mut pending_offer = None;
             let mut dialog = None;
@@ -447,6 +470,28 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                                 .unwrap_or_default();
                             let t38 = body.contains("m=image");
                             saw_t38_offer |= t38;
+                            if t38
+                                && matches!(
+                                    scenario,
+                                    Scenario::DisabledT38Answer
+                                        | Scenario::MissingT38Answer
+                                        | Scenario::RefusedAudioRestore
+                                )
+                            {
+                                let body = if scenario != Scenario::MissingT38Answer {
+                                    t38_sdp(0)
+                                } else {
+                                    String::new()
+                                };
+                                let extra = format!(
+                                    "Contact: <sip:receiver@127.0.0.1:{port}>\r\nContent-Type: application/sdp\r\n"
+                                );
+                                sip.send_to(
+                                    response(&request, 200, "OK", &extra, &body).as_bytes(),
+                                    source,
+                                )?;
+                                continue;
+                            }
                             if t38 && scenario == Scenario::Reject {
                                 sip.send_to(
                                     response(&request, 488, "Not Acceptable Here", "", "")
@@ -466,6 +511,15 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                                 continue;
                             }
                             if !t38 {
+                                restored_audio |= saw_t38_offer;
+                                if restored_audio && scenario == Scenario::RefusedAudioRestore {
+                                    sip.send_to(
+                                        response(&request, 488, "Not Acceptable Here", "", "")
+                                            .as_bytes(),
+                                        source,
+                                    )?;
+                                    continue;
+                                }
                                 dialog = Some(request.to_string());
                             }
                             let remote_port: u16 = body
@@ -495,7 +549,9 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                                     )
                                 }
                                 false => {
-                                    modem = Some(AudioFax::receiver(&output, "FIXTURE")?);
+                                    if modem.is_none() {
+                                        modem = Some(AudioFax::receiver(&output, "FIXTURE")?);
+                                    }
                                     audio_peer =
                                         Some(SocketAddr::from(([127, 0, 0, 1], remote_port)));
                                     format!(
@@ -504,13 +560,21 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                                     )
                                 }
                             };
-                            let sdp = format!(
+                            let mut sdp = format!(
                                 "v=0\r\no=fixture 1 {} IN IP4 127.0.0.1\r\ns=Fixture\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\n{media}",
                                 match t38 {
                                     true => 2,
                                     false => 1,
                                 }
                             );
+                            if scenario == Scenario::G711Move && !peer_offered {
+                                // A loopback-bound socket cannot route to 192.0.2.1;
+                                // use an unused local port as the placeholder instead.
+                                sdp = sdp.replace(
+                                    &format!("m=audio {}", audio.local_addr()?.port()),
+                                    &format!("m=audio {}", packets.local_addr()?.port()),
+                                );
+                            }
                             let extra = format!(
                                 "Contact: <sip:receiver@127.0.0.1:{port}>\r\nContent-Type: application/sdp\r\n"
                             );
@@ -523,6 +587,15 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                             sip.send_to(response(&request, 200, "OK", "", "").as_bytes(), source)?;
                         }
                         "CANCEL" => {
+                            assert!(
+                                !matches!(
+                                    scenario,
+                                    Scenario::DisabledT38Answer
+                                        | Scenario::MissingT38Answer
+                                        | Scenario::RefusedAudioRestore
+                                ),
+                                "must not cancel an INVITE with a final response"
+                            );
                             sip.send_to(response(&request, 200, "OK", "", "").as_bytes(), source)?;
                             if let Some(offer) = pending_offer.take() {
                                 match scenario {
@@ -569,6 +642,52 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                                 source,
                             )?;
                         }
+                        "ACK"
+                            if matches!(
+                                scenario,
+                                Scenario::G711Move | Scenario::G711CodecChange
+                            ) && !peer_offered =>
+                        {
+                            peer_offered = true;
+                            let codec = if scenario == Scenario::G711CodecChange {
+                                G711::Pcmu
+                            } else {
+                                G711::Pcma
+                            };
+                            let name = if codec == G711::Pcmu { "PCMU" } else { "PCMA" };
+                            let body = format!(
+                                "v=0\r\no=fixture 1 2 IN IP4 127.0.0.1\r\ns=Fixture\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio {} RTP/AVP {}\r\na=rtpmap:{} {name}/8000\r\n",
+                                audio.local_addr()?.port(),
+                                codec.payload_type(),
+                                codec.payload_type()
+                            );
+                            sip.send_to(
+                                peer_request(dialog.as_ref().unwrap(), "INVITE", port, &body)
+                                    .as_bytes(),
+                                source,
+                            )?;
+                        }
+                        "SIP/2.0"
+                            if matches!(
+                                scenario,
+                                Scenario::G711Move | Scenario::G711CodecChange
+                            ) =>
+                        {
+                            let code: u16 = request.split_whitespace().nth(1).unwrap().parse()?;
+                            if code == 200 && header(&request, "CSeq").unwrap().ends_with("INVITE")
+                            {
+                                if scenario == Scenario::G711CodecChange {
+                                    audio_codec = G711::Pcmu;
+                                }
+                                sip.send_to(
+                                    peer_request(dialog.as_ref().unwrap(), "ACK", port, "")
+                                        .as_bytes(),
+                                    source,
+                                )?;
+                            } else if code >= 300 {
+                                return Err(format!("Peer G.711 update rejected: {code}").into());
+                            }
+                        }
                         "SIP/2.0" if scenario == Scenario::PeerUpgrade => {
                             let code: u16 = request.split_whitespace().nth(1).unwrap().parse()?;
                             if code == 200 && header(&request, "CSeq").unwrap().ends_with("INVITE")
@@ -594,7 +713,7 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                     while let Ok((size, _)) = audio.recv_from(&mut buffer) {
                         if size == 172 {
                             let mut samples =
-                                G711::Pcma.decode(buffer[12..size].try_into().unwrap());
+                                audio_codec.decode(buffer[12..size].try_into().unwrap());
                             modem.receive(&mut samples);
                         }
                     }
@@ -610,11 +729,11 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                 if last_tick.elapsed() >= Duration::from_millis(20) {
                     last_tick += Duration::from_millis(20);
                     if let (Some(modem), Some(peer)) = (&mut modem, audio_peer) {
-                        let mut packet = vec![0x80, 8];
+                        let mut packet = vec![0x80, audio_codec.payload_type()];
                         packet.extend(audio_sequence.to_be_bytes());
                         packet.extend(audio_timestamp.to_be_bytes());
                         packet.extend(12345_u32.to_be_bytes());
-                        packet.extend(G711::Pcma.encode(modem.transmit()));
+                        packet.extend(audio_codec.encode(modem.transmit()));
                         audio.send_to(&packet, peer)?;
                         audio_sequence = audio_sequence.wrapping_add(1);
                         audio_timestamp = audio_timestamp.wrapping_add(160);
@@ -657,6 +776,15 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                     }
                 }
                 if let Ok(result) = result_rx.try_recv() {
+                    if scenario == Scenario::RefusedAudioRestore {
+                        let error = result
+                            .expect_err("an unconfirmed audio fallback must fail")
+                            .to_string();
+                        assert!(error.contains("Could not restore G.711"), "{error}");
+                        assert!(restored_audio);
+                        assert_eq!(received_pages, 0);
+                        break;
+                    }
                     assert_eq!(result?.sent_pages, 1);
                     assert_eq!(received_pages, 1);
                     if dense {
@@ -669,7 +797,21 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                         saw_authorization,
                         "REGISTER never answered the digest challenge"
                     );
-                    assert!(saw_t38_offer || peer_offered, "Auto did not negotiate T.38");
+                    if matches!(scenario, Scenario::G711Move | Scenario::G711CodecChange) {
+                        assert!(!saw_t38_offer, "G.711 only must never offer T.38");
+                        assert!(peer_offered);
+                    } else {
+                        assert!(saw_t38_offer || peer_offered, "Auto did not negotiate T.38");
+                    }
+                    if matches!(
+                        scenario,
+                        Scenario::DisabledT38Answer | Scenario::MissingT38Answer
+                    ) {
+                        assert!(
+                            restored_audio,
+                            "must confirm G.711 after an unusable T.38 answer"
+                        );
+                    }
                     break;
                 }
                 thread::sleep(Duration::from_millis(1));
@@ -679,6 +821,9 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
         stop.store(true, Ordering::Relaxed);
         sender.join().expect("sender panicked");
         outcome?;
+        if scenario == Scenario::RefusedAudioRestore {
+            continue;
+        }
         let mut expected =
             tiff::decoder::Decoder::new(std::fs::File::open(documents.fax_path(prepared.id))?)?;
         let mut received_bytes = std::fs::read(&output)?;

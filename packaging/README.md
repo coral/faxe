@@ -88,6 +88,11 @@ the build script, which checks the same target-specific SHA-256 digest.
 
 ## Windows identity and signing
 
+Release builds of `faxe.exe` use the Windows GUI subsystem so Store and portable
+launches open only the app window. Debug builds keep a console for diagnostics;
+`faxe-cli.exe` remains a console application. Packaging checks the linked PE
+subsystem of both executables on x64 and ARM64 before creating the artifacts.
+
 Windows Store packages use `packagedClassicApp` / `appContainer`. Their only
 capabilities are `internetClientServer` (Internet SIP/media traffic) and
 `privateNetworkClientServer` (LAN SIP servers and peers). They do not declare
@@ -201,6 +206,11 @@ Actions runners for Windows and Linux compilation and packaging.
 - `AZURE_AD_APPLICATION_SECRET`: the client secret **value**, not its ID.
 - `SELLER_ID`: numeric Seller ID from Partner Center's Legal info / Developer page.
 - `PRODUCT_ID`: FAXE's Store ID, `9PK6QF9MMNGJ`.
+
+The release workflow caller must set `secrets: inherit` as well as the called
+job's `environment: ms`. Without it, GitHub can resolve these environment secrets
+as empty when the workflow is reused, even though the manual connection check
+works ([runner issue #4453](https://github.com/actions/runner/issues/4453)).
 
 Add the Entra application in Partner Center's User management with the Manager
 role. The first submission must be published and live before automated updates

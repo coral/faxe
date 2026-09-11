@@ -24,8 +24,13 @@ fn header<'a>(message: &'a str, name: &str) -> &'a str {
         .unwrap_or("")
 }
 fn response(request: &str, code: &str, extra: &str, body: &str) -> String {
+    let tag = if header(request, "To").contains(";tag=") {
+        ""
+    } else {
+        ";tag=registrar"
+    };
     format!(
-        "SIP/2.0 {code}\r\nVia: {}\r\nFrom: {}\r\nTo: {};tag=registrar\r\nCall-ID: {}\r\nCSeq: {}\r\n{extra}Content-Length: {}\r\n\r\n{body}",
+        "SIP/2.0 {code}\r\nVia: {}\r\nFrom: {}\r\nTo: {}{tag}\r\nCall-ID: {}\r\nCSeq: {}\r\n{extra}Content-Length: {}\r\n\r\n{body}",
         header(request, "Via"),
         header(request, "From"),
         header(request, "To"),
@@ -69,6 +74,11 @@ fn receives_g711_page_with_100_ms_packet_jitter_and_reordering() -> TestResult {
     run_receive_with_jitter(FaxMode::G711, Some(G711::Pcmu), false, false, true)
 }
 static FIXTURE: Mutex<()> = Mutex::new(());
+#[test]
+fn receives_g711_after_a_t38_answer_disables_all_media() -> TestResult {
+    run_receive_with_options(FaxMode::Auto, Some(G711::Pcma), false, false, false, true)
+}
+
 fn run_receive(mode: FaxMode, codec: Option<G711>, accept_upgrade: bool, tcp: bool) -> TestResult {
     run_receive_with_jitter(mode, codec, accept_upgrade, tcp, false)
 }
@@ -78,6 +88,16 @@ fn run_receive_with_jitter(
     accept_upgrade: bool,
     tcp: bool,
     jitter: bool,
+) -> TestResult {
+    run_receive_with_options(mode, codec, accept_upgrade, tcp, jitter, false)
+}
+fn run_receive_with_options(
+    mode: FaxMode,
+    codec: Option<G711>,
+    accept_upgrade: bool,
+    tcp: bool,
+    jitter: bool,
+    disabled_t38_answer: bool,
 ) -> TestResult {
     let _fixture = FIXTURE.lock().unwrap_or_else(|error| error.into_inner());
     eprintln!("Receive scenario: {mode:?}, {codec:?}, accept_upgrade={accept_upgrade}");
@@ -175,6 +195,7 @@ fn run_receive_with_jitter(
     let mut next_frame = Instant::now();
     let mut completed = false;
     let mut dialog_to = String::new();
+    let mut restored_audio = false;
     while Instant::now() < deadline {
         while let Ok((size, source)) = sip.recv_from(&mut buffer) {
             let message = String::from_utf8_lossy(&buffer[..size]);
@@ -213,7 +234,33 @@ fn run_receive_with_jitter(
                             source,
                         )?;
                     }
+                } else if disabled_t38_answer {
+                    if message.contains("m=image") {
+                        sip.send_to(
+                            response(
+                                &message,
+                                "200 OK",
+                                "Content-Type: application/sdp\r\n",
+                                &t38(0),
+                            )
+                            .as_bytes(),
+                            source,
+                        )?;
+                    } else {
+                        restored_audio = true;
+                        sip.send_to(
+                            response(
+                                &message,
+                                "200 OK",
+                                "Content-Type: application/sdp\r\n",
+                                &initial_sdp,
+                            )
+                            .as_bytes(),
+                            source,
+                        )?;
+                    }
                 } else if accept_upgrade {
+                    assert_ne!(mode, FaxMode::G711, "G.711 receiving must never offer T.38");
                     remote_media = Some(SocketAddr::from((
                         [127, 0, 0, 1],
                         message
@@ -246,6 +293,7 @@ fn run_receive_with_jitter(
                         header(&message, "Call-ID"),
                         header(&message, "CSeq")
                     );
+                    assert_ne!(mode, FaxMode::G711, "G.711 receiving must never offer T.38");
                     sip.send_to(response.as_bytes(), source)?;
                 }
             } else if message.starts_with("SIP/2.0 200")
@@ -331,6 +379,8 @@ fn run_receive_with_jitter(
                 busy = true;
             } else if message.starts_with("BYE") {
                 sip.send_to(response(&message, "200 OK", "", "").as_bytes(), source)?;
+            } else if message.starts_with("CANCEL") && disabled_t38_answer {
+                panic!("must not cancel a re-INVITE that received a final answer");
             }
         }
         if !contact.is_empty()
@@ -460,6 +510,10 @@ fn run_receive_with_jitter(
                 fax.outcome
             );
             assert_eq!(fax.confirmed_pages, 1);
+            if disabled_t38_answer {
+                assert!(restored_audio);
+                assert_eq!(fax.transport, Some(FaxMode::G711));
+            }
             if jitter {
                 assert!(delayed_packets > 100, "fixture must delay real page data");
             }

@@ -18,6 +18,9 @@ $version = ($metadata.packages | Where-Object name -eq 'faxe-desktop').version
 $executables = @($buildMessages | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.executable })
 $desktopBinary = @($executables | Where-Object { $_.target.name -eq 'faxe' })[0].executable
 $cliBinary = @($executables | Where-Object { $_.target.name -eq 'faxe-cli' })[0].executable
+# Inspect the linked executables before either the Store or portable package is made.
+Assert-WindowsSubsystem -Binary $desktopBinary -Subsystem WINDOWS_GUI
+Assert-WindowsSubsystem -Binary $cliBinary -Subsystem WINDOWS_CUI
 # A fresh directory also prevents DLLs from an earlier package surviving a rerun.
 $stage = Join-Path $pwd "packaging\windows\stage\$env:PACKAGE_ARCH\$([guid]::NewGuid())"
 $dist = Join-Path $pwd 'dist'

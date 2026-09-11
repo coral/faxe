@@ -1,3 +1,9 @@
+// Packaged releases launch as a GUI; development builds keep console diagnostics.
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 mod acknowledgments;
 mod credentials;
 mod desktop;

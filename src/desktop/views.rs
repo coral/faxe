@@ -115,7 +115,7 @@ impl App {
                                 "{} received page(s) · {}",
                                 fax.confirmed_pages,
                                 fax.transport
-                                    .map(|m| m.to_string())
+                                    .map(|mode| format!("Transport: {}", transport_label(mode)))
                                     .unwrap_or_else(|| "Negotiating fax".into())
                             ))
                             .size(14)
@@ -167,7 +167,7 @@ impl App {
                     fax.confirmed_pages,
                     fax.recovered_pages,
                     fax.transport
-                        .map(|mode| mode.to_string())
+                        .map(|mode| format!("Transport: {}", transport_label(mode)))
                         .unwrap_or_else(|| "No media".into())
                 ))
                 .size(13)
@@ -453,11 +453,24 @@ impl App {
         ]
         .spacing(10);
         if receive_enabled {
-            receiving = receiving.push(
-                checkbox(self.snapshot.receive_settings.ecm)
-                    .label("Error correction (ECM)")
-                    .on_toggle(Message::ReceiveEcm),
-            );
+            receiving = receiving
+                .push(
+                    row![
+                        text("Receiving mode").width(Fill),
+                        pick_list(
+                            FaxMode::ALL,
+                            Some(self.snapshot.receive_settings.mode),
+                            Message::ReceiveMode
+                        )
+                    ]
+                    .spacing(16)
+                    .align_y(Vertical::Center),
+                )
+                .push(
+                    checkbox(self.snapshot.receive_settings.ecm)
+                        .label("Error correction (ECM)")
+                        .on_toggle(Message::ReceiveEcm),
+                );
         } else if saved_profile.is_none() {
             receiving = receiving.push(text("Save this profile to enable receiving.").size(13));
         } else if !saved_profile.is_some_and(|profile| profile.register) {
@@ -698,6 +711,14 @@ fn list_item(theme: &iced::Theme, state: button::Status, selected: bool) -> butt
         };
     }
     style
+}
+
+fn transport_label(mode: FaxMode) -> &'static str {
+    match mode {
+        FaxMode::G711 => "G.711",
+        FaxMode::T38 => "T.38",
+        FaxMode::Auto => "Auto",
+    }
 }
 
 fn nav(label: &'static str, tab: Tab, current: Tab) -> Element<'static, Message> {
