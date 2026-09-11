@@ -2,11 +2,19 @@
 set -euo pipefail
 binding_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_dir="$(cd "$binding_dir/../.." && pwd)"
+skip_build=false
+if [ "${1:-}" = "--skip-build" ]; then
+  # CI builds the Rust targets together before staging the library for Go.
+  skip_build=true
+  shift
+fi
 prefix="${1:-$binding_dir/native}"
 mkdir -p "$prefix/lib/pkgconfig" "$prefix/include"
 prefix="$(cd "$prefix" && pwd)"
 cd "$repo_dir"
-cargo build -p faxe-ffi --release --locked
+if [ "$skip_build" = false ]; then
+  cargo build -p faxe-ffi --release --locked
+fi
 cargo_metadata="$(cargo metadata --locked --no-deps --format-version 1)"
 target_dir="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' <<< "$cargo_metadata")"
 version="$(python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "faxe-ffi"))' <<< "$cargo_metadata")"

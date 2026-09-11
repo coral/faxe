@@ -1,4 +1,4 @@
-name: Server and Go tests
+name: server/go (linux)
 
 on:
   push:
@@ -21,45 +21,41 @@ env:
 
 jobs:
   test:
-    name: Server and Go (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: server/go (linux)
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           submodules: recursive
           persist-credentials: false
       - name: Install Linux dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build pkg-config clang libclang-dev \
             libtiff-dev libjpeg-dev uuid-dev
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install cmake ninja pkgconf libtiff jpeg-turbo llvm
-          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
-          echo 'MACOSX_DEPLOYMENT_TARGET=15.0' >> "$GITHUB_ENV"
-          echo 'CMAKE_OSX_DEPLOYMENT_TARGET=15.0' >> "$GITHUB_ENV"
       - name: Install Rust stable
         run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
-          key: server-${{ matrix.os }}
+          key: server-ubuntu-26.04
           cache-on-failure: true
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: stable
           cache: false
-      - name: Build Go native library
+      - name: Build Rust libraries, tests, and server examples
+        # Build together so test dependency features are shared with the Go library.
+        run: cargo build --release --locked -p faxe-engine -p faxe-native -p faxe-ffi --all-targets
+      - name: Test Rust engine, native transport, FFI, and server examples
+        # The native SIP endpoint has one owner per process.
+        run: cargo test --release --locked -p faxe-engine -p faxe-native -p faxe-ffi --all-targets -- --test-threads=1
+      - name: Test Rust documentation
+        run: cargo test --release --locked -p faxe-engine -p faxe-native -p faxe-ffi --doc -- --test-threads=1
+      - name: Stage native library for Go
         run: |
-          bindings/go/build.sh "$RUNNER_TEMP/faxe-native"
+          bindings/go/build.sh --skip-build "$RUNNER_TEMP/faxe-native"
           echo "PKG_CONFIG_PATH=$RUNNER_TEMP/faxe-native/lib/pkgconfig" >> "$GITHUB_ENV"
       - name: Test Go bindings and examples
         working-directory: bindings/go
@@ -67,10 +63,3 @@ jobs:
       - name: Vet Go bindings and examples
         working-directory: bindings/go
         run: go vet ./...
-      - name: Test Rust engine, native transport, and FFI
-        # The native SIP endpoint has one owner per process.
-        run: cargo test --release --locked -p faxe-engine -p faxe-native -p faxe-ffi -- --test-threads=1
-      - name: Build server examples
-        run: cargo build --release --locked -p faxe-engine --examples
-      - name: Test HTTP server
-        run: cargo test --release --locked -p faxe-engine --example server -- --test-threads=1
