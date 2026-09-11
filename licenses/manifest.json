@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generator": "cargo-about 0.9.2 + scripts/generate-licenses.py",
-  "cargo_lock_sha256": "a8ac409ff3954a7105a3b5cd2ec59a5ae8609cbad98acaa98dd72838d0714f3b",
+  "cargo_lock_sha256": "51adcb8f001ea81d02017e3fff5e0c55b51624d43b62f0fb01da3b88b18dea2d",
   "targets": [
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
@@ -2263,13 +2263,13 @@
     },
     {
       "name": "spandsp",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "license": "MIT",
       "repository": "https://github.com/coral/spandsp-rs"
     },
     {
       "name": "spandsp-sys",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "license": "MIT",
       "repository": "https://github.com/coral/spandsp-rs"
     },
@@ -5409,8 +5409,8 @@
       "name": "MIT License",
       "text": "MIT License\n\nCopyright (c) 2025 coral\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n",
       "used_by": [
-        "spandsp-sys@0.2.3",
-        "spandsp@0.2.3"
+        "spandsp-sys@0.2.4",
+        "spandsp@0.2.4"
       ],
       "sources": []
     },
@@ -6055,7 +6055,7 @@
     },
     {
       "name": "SpanDSP C library",
-      "version": "vendored by spandsp-sys 0.2.3",
+      "version": "vendored by spandsp-sys 0.2.4",
       "license": "LGPL-2.1-only",
       "source": "https://github.com/coral/spandsp-rs",
       "notes": "FAXE enables fax only. The v150 feature and its GPLv2-only modem-relay modules are excluded. Upstream COPYING also documents GPLv2 for separate tests and supporting tools; that is not the license of the linked fax library.",

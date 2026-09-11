@@ -42,7 +42,7 @@ def verify_native(metadata):
     nodes = {n["id"]: n for n in metadata["resolve"]["nodes"]}
     for name in ("spandsp", "spandsp-sys"):
         package = packages[name]
-        if package["version"] != "0.2.3":
+        if package["version"] != "0.2.4":
             raise ValueError("Review SpanDSP native notices after a version change")
         if "v150" in nodes[package["id"]]["features"]:
             raise ValueError("GPLv2-only SpanDSP v150 feature must remain disabled")

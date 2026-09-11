@@ -23,6 +23,9 @@ enum Scenario {
     CancelOffer,
     LateAnswer,
     PeerUpgrade,
+    GlarePeerUpgrade,
+    GlareRetry,
+    GlareFallback,
     Direct,
     HangupAfterReceive,
     DisabledT38Answer,
@@ -32,6 +35,15 @@ enum Scenario {
     G711CodecChange,
     RestartAfterReject,
     RestartAfterRestore,
+}
+
+#[test]
+fn sip_t38_glare_accepts_the_peer_offer_retries_and_bounds_fallback() -> Result<()> {
+    run_scenarios(&[
+        Scenario::GlarePeerUpgrade,
+        Scenario::GlareRetry,
+        Scenario::GlareFallback,
+    ])
 }
 
 #[test]
@@ -433,6 +445,8 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
             let mut dialog = None;
             let mut dialog_peer = None;
             let mut peer_offered = false;
+            let mut glare_responses = 0;
+            let mut last_glare = None;
             let mut last_tick = Instant::now();
             let mut last_peer_packet = None;
             let mut longest_peer_silence = Duration::ZERO;
@@ -478,6 +492,45 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                                 .unwrap_or_default();
                             let t38 = body.contains("m=image");
                             saw_t38_offer |= t38;
+                            if t38
+                                && matches!(
+                                    scenario,
+                                    Scenario::GlarePeerUpgrade
+                                        | Scenario::GlareRetry
+                                        | Scenario::GlareFallback
+                                )
+                            {
+                                if let Some(previous) = last_glare {
+                                    let elapsed = Instant::now().duration_since(previous);
+                                    assert!(
+                                        elapsed >= Duration::from_millis(2100),
+                                        "retry skipped glare backoff: {elapsed:?}"
+                                    );
+                                    assert!(
+                                        elapsed < Duration::from_secs(6),
+                                        "retry exceeded glare backoff: {elapsed:?}"
+                                    );
+                                }
+                                if glare_responses == 0 || scenario == Scenario::GlareFallback {
+                                    glare_responses += 1;
+                                    assert!(
+                                        glare_responses <= 3,
+                                        "T.38 glare retries must be bounded"
+                                    );
+                                    last_glare = Some(Instant::now());
+                                    sip.send_to(
+                                        response(&request, 491, "Request Pending", "", "")
+                                            .as_bytes(),
+                                        source,
+                                    )?;
+                                    continue;
+                                }
+                                assert_ne!(
+                                    scenario,
+                                    Scenario::GlarePeerUpgrade,
+                                    "retried after accepting peer T.38"
+                                );
+                            }
                             if t38
                                 && matches!(
                                     scenario,
@@ -713,7 +766,12 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                                 return Err(format!("Peer G.711 update rejected: {code}").into());
                             }
                         }
-                        "SIP/2.0" if scenario == Scenario::PeerUpgrade => {
+                        "SIP/2.0"
+                            if matches!(
+                                scenario,
+                                Scenario::PeerUpgrade | Scenario::GlarePeerUpgrade
+                            ) =>
+                        {
                             let code: u16 = request.split_whitespace().nth(1).unwrap().parse()?;
                             if code == 200 && header(&request, "CSeq").unwrap().ends_with("INVITE")
                             {
@@ -733,6 +791,23 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                         }
                         _ => (),
                     }
+                }
+                if scenario == Scenario::GlarePeerUpgrade
+                    && !peer_offered
+                    && last_glare.is_some_and(|at| at.elapsed() >= Duration::from_millis(1100))
+                {
+                    // The reported peer offered T.38 1.1 seconds after its 491.
+                    peer_offered = true;
+                    sip.send_to(
+                        peer_request(
+                            dialog.as_ref().unwrap(),
+                            "INVITE",
+                            port,
+                            &t38_sdp(packets.local_addr()?.port()),
+                        )
+                        .as_bytes(),
+                        dialog_peer.unwrap(),
+                    )?;
                 }
                 if let Some(modem) = &mut modem {
                     while let Ok((size, _)) = audio.recv_from(&mut buffer) {
@@ -812,6 +887,25 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                     }
                     assert_eq!(result?.sent_pages, 1);
                     assert_eq!(received_pages, 1);
+                    match scenario {
+                        Scenario::GlarePeerUpgrade => {
+                            assert!(peer_offered);
+                            assert_eq!(glare_responses, 1);
+                            assert!(terminal.is_some(), "peer upgrade must deliver over T.38");
+                        }
+                        Scenario::GlareRetry => {
+                            assert_eq!(glare_responses, 1);
+                            assert!(terminal.is_some(), "retry must deliver over T.38");
+                        }
+                        Scenario::GlareFallback => {
+                            assert_eq!(glare_responses, 3);
+                            assert!(
+                                terminal.is_none(),
+                                "persistent glare must fall back to G.711"
+                            );
+                        }
+                        _ => (),
+                    }
                     if dense {
                         assert!(
                             longest_peer_silence > Duration::from_secs(30),

@@ -19,7 +19,7 @@
   },
   {
     "name": "SpanDSP C library",
-    "version": "vendored by spandsp-sys 0.2.3",
+    "version": "vendored by spandsp-sys 0.2.4",
     "license": "LGPL-2.1-only",
     "source": "https://github.com/coral/spandsp-rs",
     "notes": "FAXE enables fax only. The v150 feature and its GPLv2-only modem-relay modules are excluded. Upstream COPYING also documents GPLv2 for separate tests and supporting tools; that is not the license of the linked fax library.",

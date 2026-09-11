@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 crossbeam-channel = "0.5.15"
 faxe-pj-sys = { path = "../faxe-pj-sys" }
-spandsp = { version = "0.2.3", default-features = false, features = ["fax"] }
+spandsp = { version = "0.2.4", default-features = false, features = ["fax"] }
 udptl = "0.2.0"
 rustls = { version = "0.23.44", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8.4"

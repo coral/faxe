@@ -192,8 +192,38 @@ pub fn send(
     outcome
 }
 
+fn t38_glare_delay(receiving: bool, random: u128) -> Duration {
+    // We own the Call-ID on outgoing calls. RFC 3261 gives that side
+    // 2.1–4 seconds and the answering side 0–2 seconds, in 10 ms units.
+    let ticks = if receiving {
+        random % 201
+    } else {
+        210 + random % 191
+    };
+    Duration::from_millis(ticks as u64 * 10)
+}
+
+#[cfg(test)]
+mod glare_tests {
+    use super::*;
+
+    #[test]
+    fn retry_delay_uses_call_id_ownership_and_ten_millisecond_steps() {
+        for random in 0..1000 {
+            for (receiving, low, high) in [(true, 0, 2000), (false, 2100, 4000)] {
+                let millis = t38_glare_delay(receiving, random).as_millis();
+                assert!((low..=high).contains(&millis));
+                assert_eq!(millis % 10, 0);
+            }
+        }
+    }
+}
+
 enum Attempt {
     NotStarted,
+    Backoff {
+        retry_at: Instant,
+    },
     Waiting {
         kind: Kind,
         cseq: i32,
@@ -217,6 +247,7 @@ struct CallPump {
     packets: Option<PacketNetwork>,
     fax: Option<FaxMedia>,
     attempt: Attempt,
+    t38_glare_retries: u8,
     direct_retry: bool,
     next_frame: Instant,
     cng_samples: usize,
@@ -235,6 +266,7 @@ impl CallPump {
             packets: None,
             fax: None,
             attempt: Attempt::NotStarted,
+            t38_glare_retries: 0,
             direct_retry: false,
             next_frame: Instant::now(),
             cng_samples: 0,
@@ -373,7 +405,23 @@ impl CallPump {
                         && code >= 200
                         && !matches!(code, 401 | 407)
                     {
-                        if kind == Kind::T38
+                        if kind == Kind::T38 && code == 491 && self.t38_glare_retries < 2 {
+                            // RFC 3261 section 14.1: a pending peer INVITE is a
+                            // collision, not a refusal of T.38. Keep accepting
+                            // peer offers while backing off, without starting
+                            // an audio fax that would lock the transport.
+                            let delay =
+                                t38_glare_delay(self.receiving, uuid::Uuid::new_v4().as_u128());
+                            self.t38_glare_retries += 1;
+                            tracing::info!(
+                                retry = self.t38_glare_retries,
+                                delay_ms = delay.as_millis(),
+                                "T.38 offer collided; waiting for peer offer or retry"
+                            );
+                            self.attempt = Attempt::Backoff {
+                                retry_at: Instant::now() + delay,
+                            };
+                        } else if kind == Kind::T38
                             && code >= 300
                             && matches!(self.remote, Some(RemoteMedia::Audio { .. }))
                         {
@@ -474,10 +522,16 @@ impl CallPump {
                         set_switch_allowed(false);
                         progress(FaxEvent::Stage(FaxStage::Negotiating));
                     }
-                    Mode::Auto => match &mut self.attempt {
-                        Attempt::NotStarted
-                            if (self.receiving
-                                || answered.elapsed() >= Duration::from_millis(3500)) =>
+                    Mode::Auto => match &self.attempt {
+                        attempt
+                            if match attempt {
+                                Attempt::NotStarted => {
+                                    self.receiving
+                                        || answered.elapsed() >= Duration::from_millis(3500)
+                                }
+                                Attempt::Backoff { retry_at } => Instant::now() >= *retry_at,
+                                _ => false,
+                            } =>
                         {
                             progress(FaxEvent::Stage(FaxStage::OfferingT38));
                             let cseq = sip.reinvite(Kind::T38)?;

@@ -4786,9 +4786,9 @@ dependencies = [
 
 [[package]]
 name = "spandsp"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7671eac87036d60e57d9c8390ba595d1a64113be74750817b53225c25d5de1fb"
+checksum = "25257b57456eefa210b177feb55051513fc943c90837f51e9c7be431b70140a7"
 dependencies = [
  "bitflags 2.13.1",
  "spandsp-sys",
@@ -4797,9 +4797,9 @@ dependencies = [
 
 [[package]]
 name = "spandsp-sys"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47b4e3997228289373c1d7c9366aed7dd65fc4f8b8bb39f35d1c375000021b16"
+checksum = "c1ea12db036bb0e434b236fc97f0db8fa37ac2f49c7dca8674cf3ecfa399588f"
 dependencies = [
  "bindgen 0.72.1",
  "cc",

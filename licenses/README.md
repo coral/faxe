@@ -56,7 +56,7 @@ license directory, LibTIFF, libjpeg-turbo, and the current LibTIFF compression
 dependencies (WebP, Zstandard and liblzma).
 
 The native snapshot was collected from PJPROJECT revision
-`5a457451fa2712ba18e12b01738e8ff3af2b26fd`, registry `spandsp-sys` 0.2.3,
+`5a457451fa2712ba18e12b01738e8ff3af2b26fd`, registry `spandsp-sys` 0.2.4,
 the checksum-verified PDFium chromium/8044 mac-arm64 artifact, and the native
 library versions listed in `native.json`. The generator checks PJPROJECT and
 SpanDSP notice drift, the PDFium version, and rejects SpanDSP's `v150` feature.
