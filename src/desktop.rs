@@ -486,16 +486,14 @@ impl App {
             }
             Message::Effect(effect) => match effect {
                 EngineEffect::Error(error) => self.notice = Some(report_error(error)),
+                EngineEffect::ReceivedPdfReady { path, .. } => {
+                    return self.update(Message::OpenReceived(path, false));
+                }
                 EngineEffect::ReceptionFinished { caller, pages, .. } => {
                     return Task::perform(
                         async move {
                             tokio::task::spawn_blocking(move || {
-                                notify_rust::Notification::new()
-                                    .summary("FAXE · reception finished")
-                                    .body(&format!("{caller} · {pages} recovered page(s)"))
-                                    .show()
-                                    .map(|_| ())
-                                    .map_err(|e| e.to_string())
+                                crate::notifications::reception_finished(&caller, pages)
                             })
                             .await
                             .map_err(|e| e.to_string())?

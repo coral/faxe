@@ -64,6 +64,10 @@ pub enum EngineEffect {
         caller: String,
         pages: u32,
     },
+    ReceivedPdfReady {
+        id: Uuid,
+        path: PathBuf,
+    },
 }
 pub struct Preview {
     pub width: u32,
@@ -679,6 +683,16 @@ impl Actor {
     fn received_changed(&mut self, fax: ReceivedFax) {
         if self.view.inbox.iter().any(|old| old == &fax) {
             return;
+        }
+        if let ExportStatus::Published { path } = &fax.export
+            && self.view.inbox.iter().any(|old| {
+                old.id == fax.id && !matches!(old.export, ExportStatus::Published { .. })
+            })
+        {
+            let _ = self.effects.send(EngineEffect::ReceivedPdfReady {
+                id: fax.id,
+                path: path.clone(),
+            });
         }
         let terminal = |fax: &ReceivedFax| {
             matches!(
@@ -1387,5 +1401,92 @@ impl Actor {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod reception_effect_tests {
+    use super::*;
+
+    struct NoCredentials;
+    impl Credentials for NoCredentials {
+        fn password(&self, _: Uuid) -> Result<Option<Password>> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn received_pdf_opens_once_after_publication_even_with_notifications_disabled()
+    -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut runtime =
+            EngineRuntime::open(directory.path().into(), Arc::new(NoCredentials), None)?;
+        let handle = runtime.handle();
+        let mut effects = runtime.take_effects().unwrap();
+        let id = Uuid::new_v4();
+        handle
+            .request(move |actor| {
+                actor.reserve_incoming(
+                    id,
+                    Uuid::new_v4(),
+                    "Fixture".into(),
+                    ReceiveSettings {
+                        notifications: false,
+                        ..Default::default()
+                    },
+                    "Caller".into(),
+                    std::time::SystemTime::now(),
+                )?;
+                let mut fax = actor.store.received_fax(id)?;
+                fax.outcome = ReceptionOutcome::Received;
+                for export in [
+                    ExportStatus::NoContent,
+                    ExportStatus::Failed {
+                        reason: "Folder unavailable".into(),
+                    },
+                ] {
+                    fax.export = export;
+                    actor.received_changed(fax.clone());
+                }
+                actor.store.save_received(&fax)
+            })
+            .await?;
+        assert!(effects.try_recv().is_err(), "no PDF exists to open yet");
+
+        let path = directory.path().join("received fax.pdf");
+        let published_path = path.clone();
+        handle
+            .request(move |actor| {
+                let mut fax = actor.store.received_fax(id)?;
+                fax.export = ExportStatus::Published {
+                    path: published_path,
+                };
+                actor.store.save_received(&fax)?;
+                actor.received_changed(fax.clone());
+                actor.received_changed(fax.clone());
+                fax.caller = "Updated caller".into();
+                actor.store.save_received(&fax)?;
+                actor.received_changed(fax);
+                Ok(())
+            })
+            .await?;
+        assert!(
+            matches!(effects.try_recv(), Ok(EngineEffect::ReceivedPdfReady { id: received_id, path: received_path }) if received_id == id && received_path == path)
+        );
+        assert!(
+            effects.try_recv().is_err(),
+            "duplicate and metadata updates must not reopen the PDF"
+        );
+        runtime.shutdown().await?;
+
+        let mut reopened =
+            EngineRuntime::open(directory.path().into(), Arc::new(NoCredentials), None)?;
+        let mut effects = reopened.take_effects().unwrap();
+        assert_eq!(reopened.handle().view().inbox.len(), 1);
+        assert!(
+            effects.try_recv().is_err(),
+            "existing inbox PDFs must not open at startup"
+        );
+        reopened.shutdown().await
     }
 }

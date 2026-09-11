@@ -8,6 +8,7 @@ mod acknowledgments;
 mod credentials;
 mod desktop;
 mod icons;
+mod notifications;
 mod tray;
 #[cfg(target_os = "windows")]
 mod windows_picker;
