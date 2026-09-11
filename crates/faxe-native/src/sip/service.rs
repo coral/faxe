@@ -12,6 +12,8 @@ use std::{
 };
 use uuid::Uuid;
 
+type AdmissionCallback = Arc<dyn Fn(AdmissionRequest) + Send + Sync>;
+
 /// Limits count connecting calls and pending admissions as well as active media.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -125,7 +127,7 @@ pub struct ReceiveConfig {
     pub mode: Mode,
     pub ecm: bool,
     /// Enqueue an admission request. This callback must not perform I/O or block.
-    pub offer: Arc<dyn Fn(AdmissionRequest) + Send + Sync>,
+    pub offer: AdmissionCallback,
 }
 /// An owned, one-shot admission request; no native handles cross the boundary.
 pub struct AdmissionRequest {
@@ -843,7 +845,7 @@ pub(super) unsafe fn on_incoming(data: *mut pj::pjsip_rx_data) -> pj::pj_bool_t 
         }
         let admission_timeout = slot.admission_timeout;
         SELECTED.set(slot.sip.id);
-        let result = (|| -> Result<(ActiveCall, AdmissionRequest, Arc<dyn Fn(AdmissionRequest) + Send + Sync>)> {
+        let result = (|| -> Result<(ActiveCall, AdmissionRequest, AdmissionCallback)> {
             let info = pj::pjsip_rdata_get_sdp_info(data);
             if !info.is_null() {
                 check((*info).sdp_err)?;
@@ -924,13 +926,24 @@ pub(super) unsafe fn on_incoming(data: *mut pj::pjsip_rx_data) -> pj::pj_bool_t 
             } else {
                 "Unknown caller".into()
             };
-            let pending=Arc::new(AtomicBool::new(true));
-            let commands=COMMANDS.with(|slot|slot.borrow().clone()).ok_or_else(||Error::Sip("SIP service is stopping".into()))?;
-            let peer = std::ffi::CStr::from_ptr((*data).pkt_info.src_name.as_ptr()).to_string_lossy();
+            let pending = Arc::new(AtomicBool::new(true));
+            let commands = COMMANDS
+                .with(|slot| slot.borrow().clone())
+                .ok_or_else(|| Error::Sip("SIP service is stopping".into()))?;
+            let peer =
+                std::ffi::CStr::from_ptr((*data).pkt_info.src_name.as_ptr()).to_string_lossy();
             let peer = format!("{}:{}", peer, (*data).pkt_info.src_port);
-            let admission=AdmissionRequest { id,caller,destination:target,peer,arrived:SystemTime::now(),pending,commands };
-            let offer=slot.config.offer;
-            let file=PathBuf::new();
+            let admission = AdmissionRequest {
+                id,
+                caller,
+                destination: target,
+                peer,
+                arrived: SystemTime::now(),
+                pending,
+                commands,
+            };
+            let offer = slot.config.offer;
+            let file = PathBuf::new();
             let mut response = ptr::null_mut();
             let answered = check(pj::pjsip_inv_initial_answer(
                 slot.sip.inv,
@@ -944,21 +957,25 @@ pub(super) unsafe fn on_incoming(data: *mut pj::pjsip_rx_data) -> pj::pj_bool_t 
             if let Err(error) = answered {
                 push(Event::MediaError(error.to_string()));
             }
-            Ok((ActiveCall {
-                sip: slot.sip,
-                sockets: slot.sockets,
-                request: ServiceSend {
-                    account: slot.config.account,
-                    destination: String::new(),
-                    file,
-                    station_id: slot.config.station_id,
-                    mode: slot.config.mode,
+            Ok((
+                ActiveCall {
+                    sip: slot.sip,
+                    sockets: slot.sockets,
+                    request: ServiceSend {
+                        account: slot.config.account,
+                        destination: String::new(),
+                        file,
+                        station_id: slot.config.station_id,
+                        mode: slot.config.mode,
+                    },
+                    pump: CallPump::new(true, slot.config.ecm),
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                    reply: None,
+                    incoming: Some(id),
                 },
-                pump: CallPump::new(true, slot.config.ecm),
-                cancelled: Arc::new(AtomicBool::new(false)),
-                reply: None,
-                incoming: Some(id),
-            }, admission, offer))
+                admission,
+                offer,
+            ))
         })();
         match result {
             Ok((call, request, offer)) => {
@@ -1355,12 +1372,14 @@ fn service_loop(
                 let connection_result = if changed && held {
                     Ok(())
                 } else if let Some(direct) = &listener {
-                    if connections.contains_key(&config.account.id) {
-                        Ok(())
-                    } else {
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        connections.entry(config.account.id)
+                    {
                         Connection::listening(config.account.clone(), direct.clone()).map(|c| {
-                            connections.insert(config.account.id, c);
+                            entry.insert(c);
                         })
+                    } else {
+                        Ok(())
                     }
                 } else {
                     ensure_connection(

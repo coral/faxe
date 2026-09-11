@@ -24,11 +24,13 @@ const WIDTH: u32 = 1728;
 const MAX_PAGES: u32 = 250;
 const MAX_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
 
+type WakeCallback = Arc<dyn Fn() + Send + Sync>;
+
 #[derive(Clone, Default)]
 pub struct Cancellation {
     notify: Arc<tokio::sync::Notify>,
     flag: Arc<AtomicBool>,
-    wake: Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
+    wake: Arc<std::sync::Mutex<Option<WakeCallback>>>,
 }
 impl std::fmt::Debug for Cancellation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -63,7 +65,7 @@ impl Cancellation {
     pub(crate) fn flag(&self) -> Arc<AtomicBool> {
         self.flag.clone()
     }
-    pub(crate) fn set_wake(&self, wake: Option<Arc<dyn Fn() + Send + Sync>>) {
+    pub(crate) fn set_wake(&self, wake: Option<WakeCallback>) {
         if let Ok(mut slot) = self.wake.lock() {
             *slot = wake.clone();
         }
@@ -471,17 +473,23 @@ fn grayscale_on_white(source: DynamicImage) -> GrayImage {
         DynamicImage::ImageLuma8(gray) => return gray,
         DynamicImage::ImageLumaA8(gray) => gray
             .as_raw()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| composite(u32::from(p[0]), p[1]))
             .collect(),
         DynamicImage::ImageRgb8(rgb) => rgb
             .as_raw()
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|p| luma(p[0], p[1], p[2]) as u8)
             .collect(),
         DynamicImage::ImageRgba8(rgba) => rgba
             .as_raw()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| composite(luma(p[0], p[1], p[2]), p[3]))
             .collect(),
         source => return grayscale_on_white(DynamicImage::ImageRgba8(source.into_rgba8())),

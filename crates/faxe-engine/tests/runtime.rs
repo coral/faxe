@@ -58,6 +58,52 @@ async fn latest_view_shares_unchanged_collections_and_idle_publishes_nothing() -
 }
 
 #[tokio::test]
+async fn removing_a_destination_updates_observers_and_survives_restart() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let runtime = EngineRuntime::open(directory.path().into(), Arc::new(NoCredentials), None)?;
+    let handle = runtime.handle();
+    let profile = profile();
+    handle.save_profile(profile.clone()).await?;
+    let removed = Destination {
+        id: Uuid::new_v4(),
+        name: "Remove this destination".into(),
+        address: "12345".into(),
+        profile_id: profile.id,
+    };
+    // A second bookmark using the same address must remain untouched.
+    let kept = Destination {
+        id: Uuid::new_v4(),
+        name: "Keep this destination".into(),
+        ..removed.clone()
+    };
+    handle.save_destination(removed.clone()).await?;
+    handle.save_destination(kept.clone()).await?;
+    let mut views = handle.observe();
+    let before = views.borrow_and_update().clone();
+    handle.remove_destination(removed.id).await?;
+    tokio::time::timeout(Duration::from_secs(2), views.changed())
+        .await
+        .expect("destination removal should publish a view")
+        .map_err(|_| Error::WorkerStopped)?;
+    let after = views.borrow_and_update().clone();
+    assert_eq!(before.destinations.len(), 2);
+    assert_eq!(after.destinations.len(), 1);
+    assert_eq!(after.destinations[0].id, kept.id);
+    assert!(Arc::ptr_eq(&before.profiles, &after.profiles));
+    assert!(Arc::ptr_eq(&before.jobs, &after.jobs));
+    // Repeated clicks are harmless.
+    handle.remove_destination(removed.id).await?;
+    runtime.shutdown().await?;
+
+    let reopened = EngineRuntime::open(directory.path().into(), Arc::new(NoCredentials), None)?;
+    let view = reopened.handle().view();
+    assert_eq!(view.destinations.len(), 1);
+    assert_eq!(view.destinations[0].id, kept.id);
+    assert_eq!(view.profiles[0].id, profile.id);
+    reopened.shutdown().await
+}
+
+#[tokio::test]
 async fn shutdown_closes_streams_even_when_clients_keep_handles() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let mut runtime = EngineRuntime::open(directory.path().into(), Arc::new(NoCredentials), None)?;

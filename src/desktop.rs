@@ -32,7 +32,7 @@ pub enum Message {
     Started(Result<Startup, String>),
     EngineChanged(Arc<EngineView>),
     Effect(EngineEffect),
-    QueueChanged(Result<Job, String>),
+    QueueChanged(Result<Box<Job>, String>),
     QueueCleared(Result<usize, String>),
     PreviewSourceLoaded(Uuid, u32, Result<Arc<PreviewSource>, String>),
     TonePreviewLoaded(Uuid, u32, u64, Result<iced::widget::image::Handle, String>),
@@ -47,13 +47,19 @@ pub enum Message {
     Tab(Tab),
     Browse,
     Files(Vec<PathBuf>),
+    #[cfg(target_os = "windows")]
     FilesPicked(Result<Vec<PathBuf>, String>),
     Remove(usize),
     Move(usize, isize),
     Destination(String),
     DestinationName(String),
+    NameDestination(bool),
+    ManageDestinations(bool),
     SaveDestination,
+    DestinationSaved(Result<(), String>),
     UseDestination(Uuid),
+    RemoveDestination(Uuid),
+    DestinationRemoved(Result<(), String>),
     Profile(SipProfile),
     SendingMode(FaxMode),
     Paper(PaperSize),
@@ -124,6 +130,9 @@ pub struct App {
     selected_profile: Option<SipProfile>,
     destination: String,
     destination_name: String,
+    naming_destination: bool,
+    managing_destinations: bool,
+    saving_destination: bool,
     options: DocumentOptions,
     prepared: Option<PreparedDocument>,
     preparing: Option<Cancellation>,
@@ -142,7 +151,12 @@ pub struct App {
 
 /// A startup result transfers its unique runtime owner into App exactly once.
 #[derive(Clone)]
-pub struct Startup(Arc<Mutex<Option<(EngineRuntime, Result<Settings, String>)>>>);
+pub struct Startup(Arc<Mutex<Option<StartupState>>>);
+
+struct StartupState {
+    runtime: EngineRuntime,
+    settings: Result<Settings, String>,
+}
 impl std::fmt::Debug for Startup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Startup")
@@ -271,6 +285,9 @@ impl App {
             selected_profile: None,
             destination: String::new(),
             destination_name: String::new(),
+            naming_destination: false,
+            managing_destinations: false,
+            saving_destination: false,
             options: DocumentOptions::default(),
             prepared: None,
             preparing: None,
@@ -295,9 +312,10 @@ impl App {
                         Some(Arc::new(SipSender::new()?)),
                     )?;
                     let settings = Settings::load().map_err(|e| e.to_string());
-                    Ok::<_, faxe_engine::Error>(Startup(Arc::new(Mutex::new(Some((
-                        runtime, settings,
-                    ))))))
+                    Ok::<_, faxe_engine::Error>(Startup(Arc::new(Mutex::new(Some(StartupState {
+                        runtime,
+                        settings,
+                    })))))
                 })
                 .await
                 .map_err(|e| e.to_string())?
@@ -415,7 +433,7 @@ impl App {
             }
             Message::QueueChanged(result) => match result {
                 Ok(job) => {
-                    self.show_progress(job);
+                    self.show_progress(*job);
                     self.notice = None;
                 }
                 Err(error) => self.notice = Some(report_error(error)),
@@ -424,8 +442,10 @@ impl App {
                 self.starting = false;
                 match result {
                     Ok(startup) => {
-                        let Some((mut runtime, settings)) =
-                            startup.0.lock().ok().and_then(|mut slot| slot.take())
+                        let Some(StartupState {
+                            mut runtime,
+                            settings,
+                        }) = startup.0.lock().ok().and_then(|mut slot| slot.take())
                         else {
                             return Task::none();
                         };
@@ -572,6 +592,7 @@ impl App {
                     self.invalidate_document();
                 }
             }
+            #[cfg(target_os = "windows")]
             Message::FilesPicked(result) => match result {
                 Ok(paths) => return self.update(Message::Files(paths)),
                 Err(error) => self.notice = Some(report_error(error)),
@@ -594,6 +615,22 @@ impl App {
             }
             Message::Destination(value) => self.destination = value,
             Message::DestinationName(value) => self.destination_name = value,
+            Message::ManageDestinations(managing) => {
+                self.managing_destinations = managing;
+                if managing && !self.saving_destination {
+                    self.naming_destination = false;
+                }
+            }
+            Message::NameDestination(naming) => {
+                if !self.saving_destination {
+                    self.naming_destination = naming;
+                    self.destination_name.clear();
+                    if naming {
+                        self.managing_destinations = false;
+                        return iced::widget::operation::focus("destination-name");
+                    }
+                }
+            }
             Message::Profile(profile) => {
                 self.selected_profile = Some(profile);
                 return self.save_settings();
@@ -655,12 +692,16 @@ impl App {
                 return settings;
             }
             Message::SaveDestination => {
+                if !self.can_save_destination() {
+                    return Task::none();
+                }
                 if let (Some(engine), Some(profile)) = (self.engine.clone(), &self.selected_profile)
                 {
+                    self.saving_destination = true;
                     let destination = Destination {
                         id: Uuid::new_v4(),
-                        name: self.destination_name.clone(),
-                        address: self.destination.clone(),
+                        name: self.destination_name.trim().into(),
+                        address: self.destination.trim().into(),
                         profile_id: profile.id,
                     };
                     return Task::perform(
@@ -670,9 +711,39 @@ impl App {
                                 .await
                                 .map_err(|e| e.to_string())
                         },
-                        Message::ActionFinished,
+                        Message::DestinationSaved,
                     );
                 }
+            }
+            Message::DestinationSaved(result) => {
+                self.saving_destination = false;
+                self.notice = Some(match result {
+                    Ok(()) => {
+                        self.naming_destination = false;
+                        self.destination_name.clear();
+                        "Destination saved.".into()
+                    }
+                    Err(error) => report_error(error),
+                });
+            }
+            Message::RemoveDestination(id) => {
+                if let Some(engine) = self.engine.clone() {
+                    return Task::perform(
+                        async move {
+                            engine
+                                .remove_destination(id)
+                                .await
+                                .map_err(|e| e.to_string())
+                        },
+                        Message::DestinationRemoved,
+                    );
+                }
+            }
+            Message::DestinationRemoved(result) => {
+                self.notice = Some(match result {
+                    Ok(()) => "Saved destination removed.".into(),
+                    Err(error) => report_error(error),
+                });
             }
             Message::UseDestination(id) => {
                 if let Some(destination) = self
@@ -681,6 +752,11 @@ impl App {
                     .iter()
                     .find(|destination| destination.id == id)
                 {
+                    self.managing_destinations = false;
+                    if !self.saving_destination {
+                        self.naming_destination = false;
+                        self.destination_name.clear();
+                    }
                     self.destination = destination.address.clone();
                     self.selected_profile = self
                         .snapshot
@@ -818,7 +894,7 @@ impl App {
                     };
                     return Task::perform(
                         async move { engine.enqueue(request).await.map_err(|e| e.to_string()) },
-                        Message::QueueChanged,
+                        |result| Message::QueueChanged(result.map(Box::new)),
                     );
                 }
             }
@@ -834,7 +910,7 @@ impl App {
                 if let Some(engine) = self.engine.clone() {
                     return Task::perform(
                         async move { engine.retry(id).await.map_err(|e| e.to_string()) },
-                        Message::QueueChanged,
+                        |result| Message::QueueChanged(result.map(Box::new)),
                     );
                 }
             }
@@ -1017,6 +1093,9 @@ impl App {
                 .cloned();
         }
         self.snapshot = snapshot;
+        if self.snapshot.destinations.is_empty() {
+            self.managing_destinations = false;
+        }
         if self.selected_profile.is_none() {
             self.selected_profile = self.snapshot.profiles.first().cloned();
         }
@@ -1167,6 +1246,22 @@ impl App {
     fn hide_progress(&mut self) {
         self.progress_visible = false;
         self.animation_time = Instant::now();
+    }
+
+    fn saved_destination(&self) -> Option<&Destination> {
+        let profile = self.selected_profile.as_ref()?;
+        self.snapshot.destinations.iter().find(|destination| {
+            destination.profile_id == profile.id && destination.address == self.destination.trim()
+        })
+    }
+
+    fn can_save_destination(&self) -> bool {
+        self.engine.is_some()
+            && self.selected_profile.is_some()
+            && !self.destination.trim().is_empty()
+            && !self.destination_name.trim().is_empty()
+            && self.saved_destination().is_none()
+            && !self.saving_destination
     }
 
     fn save_settings(&mut self) -> Task<Message> {

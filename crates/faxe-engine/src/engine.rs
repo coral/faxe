@@ -137,6 +137,9 @@ impl Engine {
             .handle()
             .blocking(move |a| a.save_destination(destination))
     }
+    pub fn remove_destination(&self, id: Uuid) -> Result<()> {
+        self.0.handle().blocking(move |a| a.remove_destination(id))
+    }
     pub fn configure_receiver(&self, settings: crate::ReceiveSettings) -> Result<()> {
         self.0
             .handle()

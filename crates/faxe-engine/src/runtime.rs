@@ -127,12 +127,14 @@ impl EngineRuntime {
                     directory,
                     credentials,
                     backend,
-                    completion,
-                    views,
-                    worker_events,
-                    effects,
                     options,
-                    incoming,
+                    ActorChannels {
+                        completion,
+                        views,
+                        events: worker_events,
+                        effects,
+                        incoming,
+                    },
                 );
                 match start {
                     Ok(mut actor) => {
@@ -359,6 +361,9 @@ impl EngineHandle {
     pub async fn save_destination(&self, destination: Destination) -> Result<()> {
         self.request(move |a| a.save_destination(destination)).await
     }
+    pub async fn remove_destination(&self, id: Uuid) -> Result<()> {
+        self.request(move |a| a.remove_destination(id)).await
+    }
     pub async fn configure_receiver(&self, settings: ReceiveSettings) -> Result<()> {
         self.request(move |a| a.configure_receiver(settings)).await
     }
@@ -492,6 +497,15 @@ struct PendingIncoming {
     profile_name: String,
     options: ReceiveSettings,
 }
+
+struct ActorChannels {
+    completion: channel::Sender<Internal>,
+    views: watch::Sender<Arc<EngineView>>,
+    events: broadcast::Sender<EngineEvent>,
+    effects: mpsc::UnboundedSender<EngineEffect>,
+    incoming: mpsc::Sender<IncomingFax>,
+}
+
 pub(crate) struct Actor {
     store: Store,
     directory: PathBuf,
@@ -528,13 +542,16 @@ impl Actor {
         directory: PathBuf,
         credentials: Arc<dyn Credentials>,
         backend: Option<Arc<dyn FaxBackend>>,
-        completion: channel::Sender<Internal>,
-        views: watch::Sender<Arc<EngineView>>,
-        events: broadcast::Sender<EngineEvent>,
-        effects: mpsc::UnboundedSender<EngineEffect>,
         options: EngineOptions,
-        incoming: mpsc::Sender<IncomingFax>,
+        channels: ActorChannels,
     ) -> Result<Self> {
+        let ActorChannels {
+            completion,
+            views,
+            events,
+            effects,
+            incoming,
+        } = channels;
         let store = Store::open(&directory).map_err(|error| {
             Error::Invalid(format!(
                 "Opening fax database at {}: {error}",
@@ -712,13 +729,13 @@ impl Actor {
         for (_, pending) in self.admissions.drain() {
             let _ = pending.request.reject();
         }
-        if let Some(service) = self.service.take() {
-            if let Err(error) = self.spawn("faxe-stop", move || {
+        if let Some(service) = self.service.take()
+            && let Err(error) = self.spawn("faxe-stop", move || {
                 service.shutdown();
                 Box::new(|_| {})
-            }) {
-                self.error(error);
-            }
+            })
+        {
+            self.error(error);
         }
     }
     fn publish(&mut self) {
@@ -814,6 +831,12 @@ impl Actor {
             |d| d.id,
         );
         Arc::make_mut(&mut self.view.destinations).sort_by(|a, b| a.name.cmp(&b.name));
+        self.dirty = true;
+        Ok(())
+    }
+    pub(crate) fn remove_destination(&mut self, id: Uuid) -> Result<()> {
+        self.store.remove_destination(id)?;
+        Arc::make_mut(&mut self.view.destinations).retain(|destination| destination.id != id);
         self.dirty = true;
         Ok(())
     }
@@ -1066,14 +1089,16 @@ impl Actor {
         }
         let request = pending.request;
         let result = self.reserve_incoming(
-            id,
+            IncomingFax {
+                id,
+                caller: request.caller.clone(),
+                arrived_at: request.arrived.into(),
+                destination: request.destination.clone(),
+                peer: request.peer.clone(),
+            },
             pending.profile_id,
             pending.profile_name,
             pending.options,
-            request.caller.clone(),
-            request.arrived,
-            request.destination.clone(),
-            request.peer.clone(),
         );
         match result {
             Ok(path) => {
@@ -1096,18 +1121,21 @@ impl Actor {
     }
     fn reserve_incoming(
         &mut self,
-        id: Uuid,
+        incoming: IncomingFax,
         profile_id: Option<Uuid>,
         profile_name: String,
         options: ReceiveSettings,
-        caller: String,
-        arrived: std::time::SystemTime,
-        destination: String,
-        peer: String,
     ) -> Result<PathBuf> {
         if self.stopping {
             return Err(Error::WorkerStopped);
         }
+        let IncomingFax {
+            id,
+            caller,
+            arrived_at,
+            destination,
+            peer,
+        } = incoming;
         let spool = self.directory.join("inbox").join(id.to_string());
         std::fs::create_dir_all(&spool)?;
         #[cfg(unix)]
@@ -1115,7 +1143,6 @@ impl Actor {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&spool, std::fs::Permissions::from_mode(0o700))?;
         }
-        let arrived_at: chrono::DateTime<chrono::Utc> = arrived.into();
         let fax = ReceivedFax {
             id,
             profile_id,
@@ -1590,17 +1617,19 @@ mod reception_effect_tests {
         handle
             .request(move |actor| {
                 actor.reserve_incoming(
-                    id,
+                    IncomingFax {
+                        id,
+                        caller: "Caller".into(),
+                        arrived_at: chrono::Utc::now(),
+                        destination: String::new(),
+                        peer: String::new(),
+                    },
                     Some(Uuid::new_v4()),
                     "Fixture".into(),
                     ReceiveSettings {
                         notifications: false,
                         ..Default::default()
                     },
-                    "Caller".into(),
-                    std::time::SystemTime::now(),
-                    String::new(),
-                    String::new(),
                 )?;
                 let mut fax = actor.store.received_fax(id)?;
                 fax.outcome = ReceptionOutcome::Received;

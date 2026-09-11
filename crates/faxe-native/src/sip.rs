@@ -444,10 +444,7 @@ impl CallPump {
         if self.fax.is_none() {
             match self.remote.as_ref() {
                 Some(RemoteMedia::T38 { .. })
-                    if matches!(self.attempt, Attempt::Waiting { .. }) =>
-                {
-                    ()
-                }
+                    if matches!(self.attempt, Attempt::Waiting { .. }) => {}
                 Some(RemoteMedia::T38 { bit_rate, .. }) => {
                     let mut terminal = match self.receiving {
                         true => PacketFax::receiver_with_ecm(

@@ -283,44 +283,16 @@ impl App {
                 )
                 .into(),
         };
-        let mut route = column![
-            text("Send to").size(24),
-            pick_list(
-                self.snapshot.profiles.as_ref().clone(),
-                self.selected_profile.clone(),
-                Message::Profile
-            )
-            .placeholder("Choose a SIP profile")
-            .width(Fill),
-            text_input("Fax number or sip:user@server", &self.destination)
-                .on_input(Message::Destination),
-            row![
-                text_input("Save destination as…", &self.destination_name)
-                    .on_input(Message::DestinationName),
-                button("Save").on_press(Message::SaveDestination)
-            ]
-            .spacing(8),
-        ]
-        .spacing(10);
-        for destination in self.snapshot.destinations.iter() {
-            route = route.push(
-                button(text(&destination.name)).on_press(Message::UseDestination(destination.id)),
-            );
-        }
-        route = route.push(
-            button("Send fax").on_press_maybe(
-                (self
-                    .prepared
-                    .as_ref()
-                    .is_some_and(|document| document.options == self.options)
-                    && self.selected_profile.is_some()
-                    && !self.destination.is_empty()
-                    && self.preparing.is_none())
-                .then_some(Message::Enqueue),
-            ),
-        );
+        let route = self.destination_form();
         let left = scrollable(
-            column![attachments, options, prepare, rule::horizontal(1), route].spacing(20),
+            column![
+                attachments,
+                options,
+                row![space().width(Fill), prepare],
+                rule::horizontal(1),
+                route
+            ]
+            .spacing(20),
         )
         .width(FillPortion(3));
         let preview: Element<'_, Message> = match (&self.prepared, &self.engine) {
@@ -359,6 +331,154 @@ impl App {
         .spacing(28)
         .height(Fill)
         .into()
+    }
+
+    fn destination_form(&self) -> Element<'_, Message> {
+        let saved = self.saved_destination();
+        let mut heading = row![text("Send to").size(24), space().width(Fill)]
+            .spacing(10)
+            .align_y(Vertical::Center);
+        if !self.snapshot.destinations.is_empty() {
+            heading = heading
+                .push(
+                    pick_list(
+                        self.snapshot
+                            .destinations
+                            .iter()
+                            .cloned()
+                            .map(DestinationChoice)
+                            .collect::<Vec<_>>(),
+                        saved.cloned().map(DestinationChoice),
+                        |choice| Message::UseDestination(choice.0.id),
+                    )
+                    .placeholder("Saved destinations")
+                    .text_size(14)
+                    .width(180),
+                )
+                .push(
+                    button(
+                        text(if self.managing_destinations {
+                            "Done"
+                        } else {
+                            "Manage"
+                        })
+                        .size(13),
+                    )
+                    .style(button::text)
+                    .on_press(Message::ManageDestinations(!self.managing_destinations)),
+                );
+        }
+        let mut route = column![heading].spacing(12);
+        if self.managing_destinations && !self.snapshot.destinations.is_empty() {
+            let mut destinations = column![].spacing(8);
+            for destination in self.snapshot.destinations.iter() {
+                destinations = destinations.push(
+                    row![
+                        column![
+                            text(&destination.name).size(14),
+                            text(&destination.address).size(12).style(text::secondary),
+                        ]
+                        .spacing(2)
+                        .width(Fill),
+                        button(text("Remove").size(13))
+                            .style(button::text)
+                            .on_press_maybe(
+                                self.engine
+                                    .as_ref()
+                                    .map(|_| Message::RemoveDestination(destination.id))
+                            ),
+                    ]
+                    .spacing(12)
+                    .align_y(Vertical::Center),
+                );
+            }
+            route = route.push(
+                container(scrollable(destinations).height(iced::Length::Shrink))
+                    .padding(12)
+                    .max_height(160)
+                    .width(Fill)
+                    .style(container::bordered_box),
+            );
+        }
+        route = route.push(
+            text_input("Fax number or SIP address", &self.destination)
+                .on_input(Message::Destination)
+                .padding(12),
+        );
+        let mut details = row![
+            text("Via").size(13).style(text::secondary),
+            pick_list(
+                self.snapshot.profiles.as_ref().clone(),
+                self.selected_profile.clone(),
+                Message::Profile,
+            )
+            .placeholder("Choose a profile")
+            .text_size(13)
+            .padding([4, 8])
+            .width(160),
+            space().width(Fill),
+        ]
+        .spacing(6)
+        .align_y(Vertical::Center);
+        if !self.naming_destination
+            && saved.is_none()
+            && self.engine.is_some()
+            && self.selected_profile.is_some()
+            && !self.destination.trim().is_empty()
+        {
+            details = details.push(
+                button(text("Save destination…").size(13))
+                    .style(button::text)
+                    .on_press(Message::NameDestination(true)),
+            );
+        }
+        route = route.push(details);
+        if self.naming_destination {
+            route = route.push(
+                row![
+                    text_input("Name this destination", &self.destination_name)
+                        .id("destination-name")
+                        .on_input_maybe(
+                            (!self.saving_destination).then_some(Message::DestinationName)
+                        )
+                        .on_submit_maybe(
+                            self.can_save_destination()
+                                .then_some(Message::SaveDestination)
+                        ),
+                    button(text("Cancel").size(13))
+                        .style(button::text)
+                        .on_press_maybe(
+                            (!self.saving_destination).then_some(Message::NameDestination(false))
+                        ),
+                    button(if self.saving_destination {
+                        "Saving…"
+                    } else {
+                        "Save"
+                    })
+                    .style(button::secondary)
+                    .on_press_maybe(
+                        self.can_save_destination()
+                            .then_some(Message::SaveDestination)
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Vertical::Center),
+            );
+        }
+        route = route.push(row![
+            space().width(Fill),
+            button("Send fax").padding([10, 20]).on_press_maybe(
+                (self
+                    .prepared
+                    .as_ref()
+                    .is_some_and(|document| document.options == self.options)
+                    && self.selected_profile.is_some()
+                    && !self.destination.trim().is_empty()
+                    && self.preparing.is_none())
+                .then_some(Message::Enqueue),
+            ),
+        ]);
+        route.into()
     }
 
     fn history(&self) -> Element<'_, Message> {
@@ -509,8 +629,8 @@ impl App {
             text_input("Outbound proxy sip: URI (optional)", &self.editor.proxy).on_input(Message::Proxy),
             text_input("Fax station ID (up to 20 ASCII characters)", &self.editor.station).on_input(Message::Station),
             text("TLS uses the system trust store and verifies the server certificate. Fax media is not encrypted by SIP TLS.").size(13),
-            button(match self.saving_profile { true => "Saving…", false => "Save profile" })
-                .on_press_maybe((!self.saving_profile && self.engine.is_some() && self.editor.profile().is_ok()).then_some(Message::SaveProfile)),
+            row![space().width(Fill), button(match self.saving_profile { true => "Saving…", false => "Save profile" })
+                .on_press_maybe((!self.saving_profile && self.engine.is_some() && self.editor.profile().is_ok()).then_some(Message::SaveProfile))],
         ].spacing(12).max_width(620);
         let settings = column![
             text("Settings").size(26),
@@ -727,4 +847,13 @@ fn nav(label: &'static str, tab: Tab, current: Tab) -> Element<'static, Message>
         .style(move |theme, state| list_item(theme, state, tab == current))
         .on_press(Message::Tab(tab))
         .into()
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct DestinationChoice(faxe_engine::Destination);
+
+impl std::fmt::Display for DestinationChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.name)
+    }
 }

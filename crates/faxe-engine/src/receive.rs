@@ -56,12 +56,12 @@ impl ReceiveSettings {
                 ));
             }
         }
-        if self.profile.is_some() || self.listener.is_some() {
-            if self.folder.as_ref().is_none_or(|path| !path.is_absolute()) {
-                return Err(Error::Invalid(
-                    "Receive folder must be an absolute path".into(),
-                ));
-            }
+        if (self.profile.is_some() || self.listener.is_some())
+            && self.folder.as_ref().is_none_or(|path| !path.is_absolute())
+        {
+            return Err(Error::Invalid(
+                "Receive folder must be an absolute path".into(),
+            ));
         }
         Ok(())
     }

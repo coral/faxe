@@ -163,6 +163,12 @@ impl Store {
         Ok(())
     }
 
+    pub fn remove_destination(&mut self, id: Uuid) -> Result<()> {
+        self.connection
+            .execute("DELETE FROM destinations WHERE id=?1", [id.to_string()])?;
+        Ok(())
+    }
+
     pub fn jobs(&self) -> Result<Vec<Job>> {
         self.read_list("SELECT data FROM jobs ORDER BY created DESC, rowid DESC")
     }

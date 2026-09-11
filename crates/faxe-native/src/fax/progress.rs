@@ -67,11 +67,11 @@ impl Progress {
         }
         // SpanDSP requests the next HDLC frame after the previous one has
         // finished. Do not credit an entire frame when it is merely queued.
-        if let Some(previous) = self.pending.take() {
-            if let Some(decoder) = &self.decoder {
-                unsafe {
-                    sys::t4_rx_put(decoder.state.as_ptr(), previous.as_ptr(), previous.len());
-                }
+        if let Some(previous) = self.pending.take()
+            && let Some(decoder) = &self.decoder
+        {
+            unsafe {
+                sys::t4_rx_put(decoder.state.as_ptr(), previous.as_ptr(), previous.len());
             }
         }
         if kind == 0xbe {
