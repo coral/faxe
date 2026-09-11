@@ -51,15 +51,13 @@ impl Playout {
         })
     }
 
-    /// A signaled endpoint change may introduce a new RTP clock and SSRC.
-    /// Retain cumulative quality counters, but discard the previous stream.
-    pub fn reset_stream(&mut self) {
-        self.samples.fill(None);
-        self.anchor = None;
-        self.cursor = 0;
-        self.end = 0;
-        self.next_playout = None;
-        self.started = false;
+    /// A replacement RTP source has an independent timestamp base. Join its
+    /// first sample to the buffered tail without discarding fax audio or
+    /// restarting the playout delay. If the old buffer ran dry, resume now.
+    pub fn restart_stream(&mut self, timestamp: u32) {
+        if self.anchor.is_some() {
+            self.anchor = Some(timestamp.wrapping_sub(self.end.max(self.cursor) as u32));
+        }
     }
 
     pub fn insert(&mut self, timestamp: u32, payload: &[u8], codec: G711, now: Instant) {
@@ -144,6 +142,46 @@ mod tests {
     }
     fn frame(value: u8) -> [i16; FRAME_SAMPLES] {
         [CODEC.decode_sample(value); FRAME_SAMPLES]
+    }
+
+    #[test]
+    fn stream_restart_preserves_partial_frames_and_playout_deadlines() {
+        let start = Instant::now();
+        let mut ring = Playout::new(200).unwrap();
+        ring.insert(90_000, &packet(1), CODEC, start);
+        ring.insert(90_160, &[2; 80], CODEC, start);
+        ring.restart_stream(123);
+        ring.insert(123, &[3; 80], G711::Pcma, start + Duration::from_millis(40));
+        assert_eq!(ring.receive(start + Duration::from_millis(199)), None);
+        assert_eq!(
+            ring.receive(start + Duration::from_millis(200)),
+            Some(frame(1))
+        );
+        let mut joined = frame(2);
+        joined[80..].fill(G711::Pcma.decode_sample(3));
+        assert_eq!(
+            ring.receive(start + Duration::from_millis(220)),
+            Some(joined)
+        );
+        assert_eq!(ring.stats, ReceiveStats::default());
+        assert_eq!(
+            ring.receive(start + Duration::from_millis(240)),
+            Some([0; FRAME_SAMPLES])
+        );
+        ring.restart_stream(u32::MAX - 79);
+        ring.insert(
+            u32::MAX - 79,
+            &packet(4),
+            CODEC,
+            start + Duration::from_millis(250),
+        );
+        assert_eq!(
+            ring.receive(start + Duration::from_millis(260)),
+            Some(frame(4))
+        );
+        assert_eq!(ring.stats.missing_samples, FRAME_SAMPLES as u64);
+        assert_eq!(ring.stats.overflow_samples, 0);
+        assert_eq!(ring.stats.late_samples, 0);
     }
 
     #[test]

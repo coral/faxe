@@ -306,7 +306,7 @@ impl CallPump {
                 }
                 Event::Media(description) => {
                     let negotiated = sdp::remote(&description)?;
-                    tracing::debug!(?negotiated, "Negotiated remote media");
+                    tracing::info!(?negotiated, "Negotiated remote media");
                     if let Attempt::Waiting {
                         kind, media_ready, ..
                     } = &mut self.attempt
@@ -383,6 +383,9 @@ impl CallPump {
                             self.attempt = if kind == Kind::T38 {
                                 Attempt::Accepted
                             } else {
+                                tracing::info!(
+                                    "G.711 media restored after T.38 negotiation failed"
+                                );
                                 Attempt::Rejected
                             };
                         } else if kind == Kind::T38 {
@@ -1305,6 +1308,13 @@ pub(crate) fn check(status: pj::pj_status_t) -> Result<()> {
         return Ok(());
     }
     let mut buffer = [0 as std::ffi::c_char; 256];
+    if (pj::PJMEDIA_ERRNO_START..=pj::PJMEDIA_ERRNO_END).contains(&(status as u32)) {
+        let message =
+            unsafe { pj::pjmedia_strerror(status, buffer.as_mut_ptr(), buffer.len() as _) };
+        return Err(Error::Sip(format!("{} ({status})", unsafe {
+            string(message)
+        })));
+    }
     let message = unsafe { pj::pj_strerror(status, buffer.as_mut_ptr(), buffer.len() as _) };
     Err(Error::Sip(unsafe { string(message) }))
 }

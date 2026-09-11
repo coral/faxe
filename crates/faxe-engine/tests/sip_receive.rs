@@ -76,7 +76,31 @@ fn receives_g711_page_with_100_ms_packet_jitter_and_reordering() -> TestResult {
 static FIXTURE: Mutex<()> = Mutex::new(());
 #[test]
 fn receives_g711_after_a_t38_answer_disables_all_media() -> TestResult {
-    run_receive_with_options(FaxMode::Auto, Some(G711::Pcma), false, false, false, true)
+    run_receive_with_options(
+        FaxMode::Auto,
+        Some(G711::Pcma),
+        false,
+        false,
+        false,
+        true,
+        None,
+    )
+}
+
+#[test]
+fn receives_after_auto_fallback_and_rtp_restart_with_and_without_ecm() -> TestResult {
+    for ecm in [true, false] {
+        run_receive_with_options(
+            FaxMode::Auto,
+            Some(G711::Pcmu),
+            false,
+            false,
+            false,
+            true,
+            Some(ecm),
+        )?;
+    }
+    Ok(())
 }
 
 fn run_receive(mode: FaxMode, codec: Option<G711>, accept_upgrade: bool, tcp: bool) -> TestResult {
@@ -89,7 +113,7 @@ fn run_receive_with_jitter(
     tcp: bool,
     jitter: bool,
 ) -> TestResult {
-    run_receive_with_options(mode, codec, accept_upgrade, tcp, jitter, false)
+    run_receive_with_options(mode, codec, accept_upgrade, tcp, jitter, false, None)
 }
 fn run_receive_with_options(
     mode: FaxMode,
@@ -98,6 +122,7 @@ fn run_receive_with_options(
     tcp: bool,
     jitter: bool,
     disabled_t38_answer: bool,
+    restart_rtp_with_ecm: Option<bool>,
 ) -> TestResult {
     let _fixture = FIXTURE.lock().unwrap_or_else(|error| error.into_inner());
     eprintln!("Receive scenario: {mode:?}, {codec:?}, accept_upgrade={accept_upgrade}");
@@ -167,6 +192,7 @@ fn run_receive_with_options(
     let mut audio_transmitter = AudioFax::transmitter(&source_tiff, "SENDER")?;
     let mut audio_sequence = 0_u16;
     let mut audio_timestamp = 0_u32;
+    let mut audio_ssrc = 42_u32;
     let mut delayed_audio = std::collections::VecDeque::new();
     let mut delayed_packets = 0;
     let mut audio_peer = None;
@@ -177,6 +203,7 @@ fn run_receive_with_options(
         profile: Some(profile.id),
         folder: Some(folder.clone()),
         mode,
+        ecm: restart_rtp_with_ecm.unwrap_or(true),
         ..Default::default()
     })?;
     let deadline = Instant::now() + Duration::from_secs(100);
@@ -196,6 +223,7 @@ fn run_receive_with_options(
     let mut completed = false;
     let mut dialog_to = String::new();
     let mut restored_audio = false;
+    let mut restored_at = None;
     while Instant::now() < deadline {
         while let Ok((size, source)) = sip.recv_from(&mut buffer) {
             let message = String::from_utf8_lossy(&buffer[..size]);
@@ -248,6 +276,7 @@ fn run_receive_with_options(
                         )?;
                     } else {
                         restored_audio = true;
+                        restored_at = Some(Instant::now());
                         sip.send_to(
                             response(
                                 &message,
@@ -460,12 +489,22 @@ fn run_receive_with_options(
                     }
                 }
             } else if let (Some(codec), Some(peer)) = (codec, audio_peer) {
+                // Model the SBC changing its RTP source shortly after G.711
+                // restoration, while retaining its address and PCMU codec.
+                if restart_rtp_with_ecm.is_some()
+                    && audio_ssrc == 42
+                    && restored_at.is_some_and(|at: Instant| at.elapsed() >= Duration::from_secs(1))
+                {
+                    audio_ssrc = 84;
+                    audio_sequence = 30_000;
+                    audio_timestamp = 123;
+                }
                 let mut frame = std::array::from_fn(|_| audio_samples.pop_front().unwrap_or(0));
                 audio_transmitter.receive(&mut frame);
                 let mut packet = vec![0x80, codec.payload_type()];
                 packet.extend(audio_sequence.to_be_bytes());
                 packet.extend(audio_timestamp.to_be_bytes());
-                packet.extend(42_u32.to_be_bytes());
+                packet.extend(audio_ssrc.to_be_bytes());
                 packet.extend(codec.encode(audio_transmitter.transmit()));
                 if jitter && audio_sequence % 8 == 4 {
                     delayed_audio.push_back((
@@ -513,6 +552,9 @@ fn run_receive_with_options(
             if disabled_t38_answer {
                 assert!(restored_audio);
                 assert_eq!(fax.transport, Some(FaxMode::G711));
+            }
+            if restart_rtp_with_ecm.is_some() {
+                assert_eq!(audio_ssrc, 84, "fixture must replace the RTP stream");
             }
             if jitter {
                 assert!(delayed_packets > 100, "fixture must delay real page data");

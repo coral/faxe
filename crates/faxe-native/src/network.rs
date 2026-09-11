@@ -128,10 +128,24 @@ pub(crate) struct AudioNetwork {
     ssrc: u32,
     source: Option<u32>,
     source_change_pending: bool,
+    retired_source: Option<u32>,
+    candidate: Vec<PendingAudio>,
+    received_packets: u64,
+    malformed_packets: u64,
+    unexpected_payload_packets: u64,
+    unexpected_peer_packets: u64,
+    unselected_source_packets: u64,
     playout: Playout,
     reported: ReceiveStats,
     last_report: Instant,
     pub last_received: Instant,
+}
+
+struct PendingAudio {
+    ssrc: u32,
+    sequence: u16,
+    timestamp: u32,
+    payload: Vec<u8>,
 }
 
 impl AudioNetwork {
@@ -159,6 +173,13 @@ impl AudioNetwork {
             ssrc: u32::from_be_bytes(random[6..10].try_into().unwrap()),
             source: None,
             source_change_pending: false,
+            retired_source: None,
+            candidate: Vec::new(),
+            received_packets: 0,
+            malformed_packets: 0,
+            unexpected_payload_packets: 0,
+            unexpected_peer_packets: 0,
+            unselected_source_packets: 0,
             playout: Playout::new(playout_delay_ms)?,
             reported: ReceiveStats::default(),
             last_report: Instant::now(),
@@ -173,16 +194,18 @@ impl AudioNetwork {
             self.peer = Peer::new(address, self.symmetric);
             self.source = None;
             self.source_change_pending = false;
-            self.playout.reset_stream();
+            self.retired_source = None;
+            self.candidate.clear();
             self.last_received = Instant::now();
         } else if codec != self.codec {
             // A peer can restart RTP with a new SSRC when renegotiating the
             // codec without changing its address/port. Select the stream on
             // the first valid packet using the new codec from the accepted peer.
             self.source_change_pending = true;
+            self.candidate.clear();
         }
         // Keep the fax modem and outgoing RTP clock running across re-INVITEs.
-        // Retain decoded samples unless the peer actually replaces the SSRC.
+        // Retain decoded samples even when the peer replaces the RTP source.
         self.codec = codec;
     }
 
@@ -236,9 +259,11 @@ impl AudioNetwork {
                 continue;
             }
             let Some(packet) = Rtp::parse(&buffer[..size]) else {
+                self.malformed_packets += 1;
                 tracing::trace!(bytes = size, "Discarding malformed RTP packet");
                 continue;
             };
+            self.received_packets += 1;
             tracing::trace!(
                 direction = "RX",
                 timestamp = packet.timestamp,
@@ -247,22 +272,76 @@ impl AudioNetwork {
                 bytes = size,
                 "RTP packet"
             );
-            if packet.payload_type != self.codec.payload_type() || packet.payload.len() > 3200 {
+            if packet.payload_type != self.codec.payload_type()
+                || packet.payload.is_empty()
+                || packet.payload.len() > 3200
+            {
+                self.unexpected_payload_packets += 1;
                 continue;
             }
             if !self.peer.accept(source, packet.sequence, packet.ssrc) {
+                self.unexpected_peer_packets += 1;
                 continue;
             }
             if self.source.is_some_and(|source| source != packet.ssrc) {
-                if !self.source_change_pending {
+                self.unselected_source_packets += 1;
+                if self.retired_source == Some(packet.ssrc) {
                     continue;
+                }
+                if !self.source_change_pending {
+                    // An SBC may restart RTP on entering fax passthrough,
+                    // including after a rejected T.38 offer with unchanged SDP.
+                    // Require three sequential packets from the pinned peer,
+                    // with a consistent sample clock, before replacing it.
+                    if self.candidate.last().is_some_and(|previous| {
+                        previous.ssrc != packet.ssrc
+                            || packet.sequence != previous.sequence.wrapping_add(1)
+                            || packet.timestamp
+                                != previous
+                                    .timestamp
+                                    .wrapping_add(previous.payload.len() as u32)
+                    }) {
+                        self.candidate.clear();
+                    }
+                    self.candidate.push(PendingAudio {
+                        ssrc: packet.ssrc,
+                        sequence: packet.sequence,
+                        timestamp: packet.timestamp,
+                        payload: packet.payload.to_vec(),
+                    });
+                    if self.candidate.len() < 3 {
+                        continue;
+                    }
                 }
                 tracing::info!(
                     previous_ssrc = self.source,
                     ssrc = packet.ssrc,
-                    "RTP receive stream changed after codec renegotiation"
+                    "RTP receive stream restarted"
                 );
-                self.playout.reset_stream();
+                self.retired_source = self.source;
+                let timestamp = self
+                    .candidate
+                    .first()
+                    .map_or(packet.timestamp, |p| p.timestamp);
+                self.playout.restart_stream(timestamp);
+                // Keep the probation samples: they can contain fax training.
+                if !self.candidate.is_empty() {
+                    for pending in self.candidate.drain(..) {
+                        self.playout.insert(
+                            pending.timestamp,
+                            &pending.payload,
+                            self.codec,
+                            Instant::now(),
+                        );
+                    }
+                    self.source = Some(packet.ssrc);
+                    self.last_received = Instant::now();
+                    continue;
+                }
+            }
+            self.candidate.clear();
+            if self.source.is_none() {
+                self.playout.restart_stream(packet.timestamp);
             }
             self.source_change_pending = false;
             self.source = Some(packet.ssrc);
@@ -276,11 +355,16 @@ impl AudioNetwork {
     fn report(&mut self, final_report: bool) {
         let stats = self.playout.stats;
         if stats != self.reported || final_report {
-            tracing::info!(peer = %self.peer.address, final_report,
+            tracing::info!(peer = %self.peer.address, signaled_peer = %self.signaled_address, codec = ?self.codec, final_report,
                 late_samples = stats.late_samples,
                 overflow_samples = stats.overflow_samples,
                 duplicate_samples = stats.duplicate_samples,
                 missing_samples = stats.missing_samples,
+                received_packets = self.received_packets,
+                malformed_packets = self.malformed_packets,
+                unexpected_payload_packets = self.unexpected_payload_packets,
+                unexpected_peer_packets = self.unexpected_peer_packets,
+                unselected_source_packets = self.unselected_source_packets,
                 "G.711 receive quality");
         }
         self.reported = stats;
@@ -467,6 +551,58 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn same_codec_rtp_restart_requires_a_valid_stream_and_preserves_its_samples() -> Result<()> {
+        let local = UdpSocket::bind("127.0.0.1:0")?;
+        local.set_nonblocking(true)?;
+        let address = local.local_addr()?;
+        let socket = DatagramSocket::new(local)?;
+        let peer = UdpSocket::bind("127.0.0.1:0")?;
+        let other = UdpSocket::bind("127.0.0.1:0")?;
+        let mut network =
+            AudioNetwork::new(&socket, peer.local_addr()?, G711::Pcmu, false, None, 40)?;
+        let inject =
+            |network: &mut AudioNetwork, sender: &UdpSocket, ssrc: u32, seq: u16| -> Result<()> {
+                let mut packet = vec![0x80, G711::Pcmu.payload_type()];
+                packet.extend(seq.to_be_bytes());
+                packet.extend((u32::from(seq) * 160).to_be_bytes());
+                packet.extend(ssrc.to_be_bytes());
+                packet.extend(G711::Pcmu.encode([1000; FRAME_SAMPLES]));
+                sender.send_to(&packet, address)?;
+                let deadline = Instant::now() + Duration::from_secs(1);
+                let mut buffer = [0; 2048];
+                while socket.peek_from(&mut buffer).is_err() {
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                network.receive_packets()
+            };
+        inject(&mut network, &peer, 111, 5000)?;
+        // Gateways can replace their RTP source when switching to fax, even
+        // after rejecting T.38 without changing the G.711 codec or SDP.
+        inject(&mut network, &peer, 222, 1)?;
+        inject(&mut network, &peer, 222, 1)?; // A duplicate is not confirmation.
+        inject(&mut network, &other, 222, 2)?;
+        assert_eq!(network.source, Some(111));
+        network.last_received = Instant::now() - Duration::from_secs(31);
+        inject(&mut network, &peer, 222, 2)?;
+        assert_eq!(network.source, Some(111));
+        inject(&mut network, &peer, 222, 3)?;
+        assert_eq!(network.source, Some(222));
+        assert!(network.last_received.elapsed() < Duration::from_secs(1));
+        let expected = G711::Pcmu.decode(G711::Pcmu.encode([1000; FRAME_SAMPLES]));
+        assert_eq!(network.playout.drain(), vec![expected; 4]);
+        // Late packets from the replaced stream cannot switch us back.
+        for seq in 5001..5004 {
+            inject(&mut network, &peer, 111, seq)?;
+        }
+        assert_eq!(network.source, Some(222));
+        assert!(network.playout.drain().is_empty());
+        assert_eq!(network.playout.stats.missing_samples, 0);
+        assert_eq!(network.playout.stats.overflow_samples, 0);
+        Ok(())
+    }
+
+    #[test]
     fn codec_renegotiation_accepts_a_new_ssrc_on_the_same_endpoint() -> Result<()> {
         // The reported capture switches PCMA -> PCMU and SSRC at the same
         // address/port. A restarted sender may also choose a new timestamp base.
@@ -512,12 +648,15 @@ mod tests {
             assert!(network.last_received.elapsed() < Duration::from_secs(1));
             assert_eq!(
                 network.playout.drain(),
-                vec![G711::Pcmu.decode(G711::Pcmu.encode([1000; FRAME_SAMPLES]))],
-                "the new SSRC needs its own playout clock"
+                vec![
+                    G711::Pcma.decode(G711::Pcma.encode([1000; FRAME_SAMPLES])),
+                    G711::Pcmu.decode(G711::Pcmu.encode([1000; FRAME_SAMPLES])),
+                ],
+                "a new SSRC must retain buffered audio and rebase its timestamp"
             );
             assert_eq!(network.playout.stats.missing_samples, 0);
             assert_eq!(network.playout.stats.overflow_samples, 0);
-            // Once selected, keep rejecting unsolicited stream replacements.
+            // A single unsolicited packet cannot replace the selected stream.
             inject(&mut network, &peer, old_ssrc, timestamp + 160, G711::Pcmu)?;
             assert_eq!(network.source, Some(new_ssrc));
             assert!(network.playout.drain().is_empty());
@@ -570,8 +709,8 @@ mod tests {
         assert_eq!(network.source, Some(222));
         assert_eq!(
             network.playout.drain().len(),
-            1,
-            "a new clock must not create a timestamp gap"
+            2,
+            "a new clock must preserve buffered audio without a timestamp gap"
         );
         network.send([0; FRAME_SAMPLES])?;
         let mut new_packet = [0; 172];

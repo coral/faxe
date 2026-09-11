@@ -30,6 +30,13 @@ enum Scenario {
     RefusedAudioRestore,
     G711Move,
     G711CodecChange,
+    RestartAfterReject,
+    RestartAfterRestore,
+}
+
+#[test]
+fn sip_auto_fallback_survives_a_same_codec_rtp_restart() -> Result<()> {
+    run_scenarios(&[Scenario::RestartAfterReject, Scenario::RestartAfterRestore])
 }
 
 #[test]
@@ -416,6 +423,7 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
             let mut sequence = 0_u16;
             let mut audio_sequence = 0_u16;
             let mut audio_timestamp = 0_u32;
+            let mut audio_ssrc = 12345_u32;
             let mut saw_authorization = false;
             let mut saw_t38_offer = false;
             let mut restored_audio = false;
@@ -474,6 +482,7 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                                 && matches!(
                                     scenario,
                                     Scenario::DisabledT38Answer
+                                        | Scenario::RestartAfterRestore
                                         | Scenario::MissingT38Answer
                                         | Scenario::RefusedAudioRestore
                                 )
@@ -492,7 +501,17 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                                 )?;
                                 continue;
                             }
-                            if t38 && scenario == Scenario::Reject {
+                            if t38
+                                && matches!(
+                                    scenario,
+                                    Scenario::Reject | Scenario::RestartAfterReject
+                                )
+                            {
+                                if scenario == Scenario::RestartAfterReject {
+                                    audio_ssrc = 54321;
+                                    audio_sequence = 30_000;
+                                    audio_timestamp = 123;
+                                }
                                 sip.send_to(
                                     response(&request, 488, "Not Acceptable Here", "", "")
                                         .as_bytes(),
@@ -512,6 +531,11 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                             }
                             if !t38 {
                                 restored_audio |= saw_t38_offer;
+                                if restored_audio && scenario == Scenario::RestartAfterRestore {
+                                    audio_ssrc = 54321;
+                                    audio_sequence = 30_000;
+                                    audio_timestamp = 123;
+                                }
                                 if restored_audio && scenario == Scenario::RefusedAudioRestore {
                                     sip.send_to(
                                         response(&request, 488, "Not Acceptable Here", "", "")
@@ -591,6 +615,7 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                                 !matches!(
                                     scenario,
                                     Scenario::DisabledT38Answer
+                                        | Scenario::RestartAfterRestore
                                         | Scenario::MissingT38Answer
                                         | Scenario::RefusedAudioRestore
                                 ),
@@ -732,7 +757,7 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                         let mut packet = vec![0x80, audio_codec.payload_type()];
                         packet.extend(audio_sequence.to_be_bytes());
                         packet.extend(audio_timestamp.to_be_bytes());
-                        packet.extend(12345_u32.to_be_bytes());
+                        packet.extend(audio_ssrc.to_be_bytes());
                         packet.extend(audio_codec.encode(modem.transmit()));
                         audio.send_to(&packet, peer)?;
                         audio_sequence = audio_sequence.wrapping_add(1);
@@ -805,7 +830,9 @@ fn run_scenarios_with_options(scenarios: &[Scenario], dense: bool, ecm: bool) ->
                     }
                     if matches!(
                         scenario,
-                        Scenario::DisabledT38Answer | Scenario::MissingT38Answer
+                        Scenario::DisabledT38Answer
+                            | Scenario::MissingT38Answer
+                            | Scenario::RestartAfterRestore
                     ) {
                         assert!(
                             restored_audio,

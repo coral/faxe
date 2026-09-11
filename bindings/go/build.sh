@@ -7,7 +7,9 @@ mkdir -p "$prefix/lib/pkgconfig" "$prefix/include"
 prefix="$(cd "$prefix" && pwd)"
 cd "$repo_dir"
 cargo build -p faxe-ffi --release --locked
-target_dir="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+cargo_metadata="$(cargo metadata --locked --no-deps --format-version 1)"
+target_dir="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' <<< "$cargo_metadata")"
+version="$(python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "faxe-ffi"))' <<< "$cargo_metadata")"
 if [ -n "${CARGO_BUILD_TARGET:-}" ]; then target_dir="$target_dir/$CARGO_BUILD_TARGET"; fi
 case "$(uname -s)" in
   Darwin) library=libfaxe.dylib ;;
@@ -23,7 +25,7 @@ includedir=\${prefix}/include
 
 Name: faxe
 Description: Embedded Faxe engine (C ABI 1)
-Version: 1.0.4
+Version: $version
 Libs: -L\${libdir} -lfaxe -Wl,-rpath,\${libdir}
 Cflags: -I\${includedir}
 PC
