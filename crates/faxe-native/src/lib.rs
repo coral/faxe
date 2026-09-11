@@ -15,12 +15,14 @@ mod sdp;
 mod sip;
 mod tls;
 pub use fax::{
-    AudioFax, FRAME_SAMPLES, FaxEvent, FaxFailure, FaxStage, IfpPacket, PacketFax, PageProgress, TransferStats,
+    AudioFax, FRAME_SAMPLES, FaxEvent, FaxFailure, FaxStage, IfpPacket, PacketFax, PageProgress,
+    TransferStats,
 };
 pub use g711::G711;
 pub use sip::{
-    Account, AdmissionRequest, Mode, ReceiveConfig, ReceiveEvent, ReceiveState, SendRequest,
-    SendUpdate, ServiceAccount, ServiceSend, SignalingTransport, SipService, send,
+    Account, AdmissionRequest, CallLimits, ListenerConfig, Mode, ReceiveConfig, ReceiveEvent,
+    ReceiveState, SendRequest, SendUpdate, ServiceAccount, ServiceOptions, ServiceSend,
+    SignalingTransport, SipService, send,
 };
 
 #[derive(Debug, thiserror::Error)]

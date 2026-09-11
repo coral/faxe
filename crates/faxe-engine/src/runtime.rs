@@ -2,7 +2,7 @@
 use crate::*;
 use crossbeam_channel as channel;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     sync::{
         Arc,
@@ -81,6 +81,7 @@ pub struct EngineRuntime {
     stop: channel::Sender<()>,
     worker: Option<thread::JoinHandle<Result<()>>>,
     effects: Option<mpsc::UnboundedReceiver<EngineEffect>>,
+    incoming: Option<mpsc::Receiver<IncomingFax>>,
 }
 #[derive(Clone)]
 pub struct EngineHandle {
@@ -89,6 +90,7 @@ pub struct EngineHandle {
     events: Arc<broadcast::Receiver<EngineEvent>>,
     documents: Documents,
     stopped: Arc<AtomicBool>,
+    document_slots: Arc<tokio::sync::Semaphore>,
 }
 impl EngineRuntime {
     /// Blocking startup; call from a blocking worker, never the window thread.
@@ -97,6 +99,17 @@ impl EngineRuntime {
         credentials: Arc<dyn Credentials>,
         backend: Option<Arc<dyn FaxBackend>>,
     ) -> Result<Self> {
+        Self::open_with_options(directory, credentials, backend, EngineOptions::default())
+    }
+    pub fn open_with_options(
+        directory: PathBuf,
+        credentials: Arc<dyn Credentials>,
+        backend: Option<Arc<dyn FaxBackend>>,
+        options: EngineOptions,
+    ) -> Result<Self> {
+        options.validate()?;
+        let document_slots = Arc::new(tokio::sync::Semaphore::new(options.document_workers));
+        let (incoming, incoming_receiver) = mpsc::channel(options.limits.incoming);
         let (requests, inbox) = channel::bounded::<Request>(64);
         let (completion, completed) = channel::unbounded::<Internal>();
         let (stop, stopping) = channel::bounded(1);
@@ -118,6 +131,8 @@ impl EngineRuntime {
                     views,
                     worker_events,
                     effects,
+                    options,
+                    incoming,
                 );
                 match start {
                     Ok(mut actor) => {
@@ -142,10 +157,12 @@ impl EngineRuntime {
                     events: Arc::new(event_receiver),
                     documents,
                     stopped,
+                    document_slots,
                 },
                 stop,
                 worker: Some(worker),
                 effects: Some(effect_receiver),
+                incoming: Some(incoming_receiver),
             }),
             result => {
                 let _ = stop.try_send(());
@@ -163,7 +180,11 @@ impl EngineRuntime {
     pub fn take_effects(&mut self) -> Option<mpsc::UnboundedReceiver<EngineEffect>> {
         self.effects.take()
     }
+    pub fn take_incoming(&mut self) -> Option<mpsc::Receiver<IncomingFax>> {
+        self.incoming.take()
+    }
     pub fn request_shutdown(&self) {
+        self.handle.document_slots.close();
         self.handle.stopped.store(true, Ordering::Release);
         let _ = self.stop.try_send(());
     }
@@ -187,6 +208,40 @@ impl Drop for EngineRuntime {
     }
 }
 impl EngineHandle {
+    pub async fn job(&self, id: Uuid) -> Result<Job> {
+        self.request(move |a| a.store.job(id)).await
+    }
+    pub async fn reception(&self, id: Uuid) -> Result<ReceivedFax> {
+        self.request(move |a| a.store.received_fax(id)).await
+    }
+    pub async fn accept_incoming(&self, id: Uuid) -> Result<ReceivedFax> {
+        self.request(move |a| a.accept_incoming(id)).await
+    }
+    pub async fn reject_incoming(&self, id: Uuid) -> Result<()> {
+        self.request(move |a| a.reject_incoming(id)).await
+    }
+    pub async fn wait_job(&self, id: Uuid) -> Result<Job> {
+        let mut view = self.observe();
+        loop {
+            view.borrow_and_update();
+            let job = self.job(id).await?;
+            if job.state.is_finished() {
+                return Ok(job);
+            }
+            view.changed().await.map_err(|_| Error::WorkerStopped)?;
+        }
+    }
+    pub async fn wait_reception(&self, id: Uuid) -> Result<ReceivedFax> {
+        let mut view = self.observe();
+        loop {
+            view.borrow_and_update();
+            let fax = self.reception(id).await?;
+            if fax.is_finished() {
+                return Ok(fax);
+            }
+            view.changed().await.map_err(|_| Error::WorkerStopped)?;
+        }
+    }
     pub async fn save_settings(&self, settings: Settings) -> Result<()> {
         let (reply, result) = oneshot::channel();
         self.request(move |actor| actor.queue_settings(settings, reply))
@@ -245,24 +300,28 @@ impl EngineHandle {
             return Err(Error::WorkerStopped);
         }
         self.requests
-            .try_send(request)
-            .map_err(|error| match error {
-                channel::TrySendError::Full(_) => {
-                    Error::Invalid("Engine is busy; try again".into())
-                }
-                channel::TrySendError::Disconnected(_) => Error::WorkerStopped,
-            })
+            .send(request)
+            .map_err(|_| Error::WorkerStopped)
     }
     async fn request<T: Send + 'static>(
         &self,
         f: impl FnOnce(&mut Actor) -> Result<T> + Send + 'static,
     ) -> Result<T> {
         let (send, recv) = oneshot::channel();
-        self.submit(Box::new(move |a| {
-            let result = f(a);
-            a.publish();
-            let _ = send.send(result);
-        }))?;
+        let handle = self.clone();
+        tokio::task::spawn_blocking(move || {
+            handle.submit(Box::new(move |a| {
+                if a.stopping {
+                    let _ = send.send(Err(Error::WorkerStopped));
+                    return;
+                }
+                let result = f(a);
+                a.publish();
+                let _ = send.send(result);
+            }))
+        })
+        .await
+        .map_err(|_| Error::WorkerStopped)??;
         recv.await.map_err(|_| Error::WorkerStopped)?
     }
     pub async fn save_profile_with_password(
@@ -353,33 +412,26 @@ impl EngineHandle {
         cancellation: Cancellation,
         prepare: impl FnOnce(Documents, &Cancellation) -> Result<PreparedDocument> + Send + 'static,
     ) -> Result<PreparedDocument> {
+        let permit = tokio::select! {
+            permit = self.document_slots.clone().acquire_owned() => permit.map_err(|_| Error::WorkerStopped)?,
+            _ = cancellation.cancelled() => return Err(Error::Cancelled),
+        };
+        cancellation.check()?;
         let (send, recv) = oneshot::channel();
+        let id = Uuid::new_v4();
         self.request(move |a| {
-            if a.preparing.is_some() {
-                return Err(Error::Invalid(
-                    "Document preparation is already running".into(),
-                ));
-            }
-            a.preparing = Some(cancellation.clone());
+            a.preparing.insert(id, cancellation.clone());
             let documents = a.documents.clone();
             let result = a.spawn("faxe-document", move || {
+                let _permit = permit;
                 let result = prepare(documents, &cancellation);
-                match &result {
-                    Ok(document) => tracing::info!(
-                        document_id = %document.id,
-                        pages = document.pages,
-                        "Document prepared"
-                    ),
-                    Err(Error::Cancelled) => tracing::info!("Document preparation cancelled"),
-                    Err(error) => tracing::error!(%error, "Document preparation failed"),
-                }
                 Box::new(move |a| {
-                    a.preparing = None;
+                    a.preparing.remove(&id);
                     let _ = send.send(result);
                 })
             });
             if result.is_err() {
-                a.preparing = None;
+                a.preparing.remove(&id);
             }
             result
         })
@@ -434,6 +486,12 @@ fn complete(work: impl FnOnce() -> Request) -> Request {
     })
 }
 
+struct PendingIncoming {
+    request: faxe_native::AdmissionRequest,
+    profile_id: Option<Uuid>,
+    profile_name: String,
+    options: ReceiveSettings,
+}
 pub(crate) struct Actor {
     store: Store,
     directory: PathBuf,
@@ -449,13 +507,16 @@ pub(crate) struct Actor {
     settings_saving: bool,
     settings_pending: Option<(Settings, Vec<oneshot::Sender<Result<()>>>)>,
     working: usize,
-    active: Option<(Job, Cancellation)>,
-    preparing: Option<Cancellation>,
+    active: HashMap<Uuid, (Job, Cancellation)>,
+    options: EngineOptions,
+    incoming: mpsc::Sender<IncomingFax>,
+    admissions: HashMap<Uuid, PendingIncoming>,
+    preparing: HashMap<Uuid, Cancellation>,
     exports: VecDeque<Uuid>,
     exporting: Option<Uuid>,
     generation: u64,
     stopping: bool,
-    clear_active: bool,
+    clear_active: HashSet<Uuid>,
     dirty: bool,
     view: EngineView,
     views: watch::Sender<Arc<EngineView>>,
@@ -471,6 +532,8 @@ impl Actor {
         views: watch::Sender<Arc<EngineView>>,
         events: broadcast::Sender<EngineEvent>,
         effects: mpsc::UnboundedSender<EngineEffect>,
+        options: EngineOptions,
+        incoming: mpsc::Sender<IncomingFax>,
     ) -> Result<Self> {
         let store = Store::open(&directory).map_err(|error| {
             Error::Invalid(format!(
@@ -534,13 +597,16 @@ impl Actor {
             completion,
             workers: vec![],
             working: 0,
-            active: None,
-            preparing: None,
+            active: HashMap::new(),
+            options,
+            incoming,
+            admissions: HashMap::new(),
+            preparing: HashMap::new(),
             exports,
             exporting: None,
             generation: 0,
             stopping: false,
-            clear_active: false,
+            clear_active: HashSet::new(),
             dirty: true,
             view,
             views,
@@ -560,8 +626,15 @@ impl Actor {
         self.publish();
         loop {
             if !self.stopping {
-                if let Err(error) = self.start_send() {
-                    self.error(error);
+                while self.active.len() < self.options.limits.outgoing {
+                    let before = self.active.len();
+                    if let Err(error) = self.start_send() {
+                        self.error(error);
+                        break;
+                    }
+                    if self.active.len() == before {
+                        break;
+                    }
                 }
                 if let Err(error) = self.start_export() {
                     self.error(error);
@@ -630,11 +703,14 @@ impl Actor {
         self.generation += 1;
         self.view.lifecycle = Lifecycle::Stopping;
         self.dirty = true;
-        if let Some((_, cancellation)) = &self.active {
+        for (_, cancellation) in self.active.values() {
             cancellation.cancel();
         }
-        if let Some(cancellation) = &self.preparing {
+        for cancellation in self.preparing.values() {
             cancellation.cancel();
+        }
+        for (_, pending) in self.admissions.drain() {
+            let _ = pending.request.reject();
         }
         if let Some(service) = self.service.take() {
             if let Err(error) = self.spawn("faxe-stop", move || {
@@ -747,8 +823,10 @@ impl Actor {
             settings.folder = previous.folder.clone();
         }
         settings.validate(&self.view.profiles)?;
-        if settings.profile.is_some()
-            && (settings.profile != previous.profile || settings.folder != previous.folder)
+        if (settings.profile.is_some() || settings.listener.is_some())
+            && (settings.profile != previous.profile
+                || settings.listener != previous.listener
+                || settings.folder != previous.folder)
             && settings.folder.as_ref().is_none_or(|f| !f.is_dir())
         {
             return Err(Error::Invalid("Receive folder is unavailable".into()));
@@ -791,9 +869,9 @@ impl Actor {
         Ok(())
     }
     pub(crate) fn clear_queue(&mut self) -> Result<usize> {
-        if let Some((_, cancellation)) = &self.active {
+        for (&id, (_, cancellation)) in &self.active {
             cancellation.cancel();
-            self.clear_active = true;
+            self.clear_active.insert(id);
         }
         let count = self.store.clear_queue()?;
         self.view.jobs = Default::default();
@@ -820,9 +898,7 @@ impl Actor {
         Ok(job)
     }
     pub(crate) fn cancel(&mut self, id: Uuid) -> Result<()> {
-        if let Some((job, cancellation)) = &self.active
-            && job.id == id
-        {
+        if let Some((_, cancellation)) = self.active.get(&id) {
             cancellation.cancel();
             return Ok(());
         }
@@ -846,6 +922,29 @@ impl Actor {
             return Ok(());
         };
         let settings = self.view.receive_settings.clone();
+        if let Some(listener) = &settings.listener {
+            let profile = SipProfile {
+                id: Uuid::nil(),
+                name: "Direct listener".into(),
+                server: listener.bind.ip().to_string(),
+                port: listener.bind.port().max(1),
+                transport: match listener.transport {
+                    SignalingTransport::Udp => SipTransport::Udp,
+                    SignalingTransport::Tcp => SipTransport::Tcp,
+                    SignalingTransport::Tls => SipTransport::Tls,
+                },
+                username: "faxe".into(),
+                auth_username: None,
+                register: false,
+                outbound_proxy: None,
+                station_id: "FAXE".into(),
+                sending_mode: settings.mode,
+                automatic_nat: false,
+                stun_server: None,
+                audio_playout_delay_ms: 200,
+            };
+            return self.install_receiver(service, profile, settings, None);
+        }
         let Some(id) = settings.profile else {
             return service.configure(None).map_err(native_error);
         };
@@ -896,55 +995,115 @@ impl Actor {
     ) -> Result<()> {
         let completion = self.completion.clone();
         let profile_name = profile.name.clone();
-        let profile_id = profile.id;
+        let profile_id = settings.profile;
         let options = settings.clone();
-        service
-            .configure(Some(faxe_native::ReceiveConfig {
-                account: crate::sender::account(&profile, password.as_ref().map(Password::expose)),
-                station_id: profile.station_id,
-                mode: crate::sender::mode(settings.mode),
-                ecm: settings.ecm,
-                offer: Arc::new(move |request| {
-                    let options = options.clone();
-                    let profile_name = profile_name.clone();
-                    let work: Request = Box::new(move |a| {
-                        if !request.is_pending() {
-                            let _ = request.respond(Err(faxe_native::Error::Cancelled));
-                            return;
-                        }
-                        let id = request.id;
-                        let result = a.reserve_incoming(
-                            id,
-                            profile_id,
-                            profile_name,
-                            options,
-                            request.caller.clone(),
-                            request.arrived,
-                        );
-                        let result = result.map_err(|e| faxe_native::Error::Invalid(e.to_string()));
-                        if request.respond(result).is_err()
-                            && let Ok(mut fax) = a.store.received_fax(id)
-                        {
-                            fax.outcome = ReceptionOutcome::Interrupted;
-                            fax.result = Some(ReceptionResult::Interrupted);
-                            if a.store.save_received(&fax).is_ok() {
-                                a.received_changed(fax);
-                            }
-                        }
-                    });
-                    let _ = completion.send(Internal::Message(work));
-                }),
-            }))
-            .map_err(native_error)
+        let config = faxe_native::ReceiveConfig {
+            account: crate::sender::account(&profile, password.as_ref().map(Password::expose)),
+            station_id: profile.station_id,
+            mode: crate::sender::mode(settings.mode),
+            ecm: settings.ecm,
+            offer: Arc::new(move |request| {
+                let pending = PendingIncoming {
+                    request,
+                    profile_id,
+                    profile_name: profile_name.clone(),
+                    options: options.clone(),
+                };
+                let _ = completion.send(Internal::Message(Box::new(move |a| {
+                    a.offer_incoming(pending)
+                })));
+            }),
+        };
+        if let Some(listener) = settings.listener {
+            service
+                .configure_listener(config, listener)
+                .map_err(native_error)
+        } else {
+            service.configure(Some(config)).map_err(native_error)
+        }
+    }
+    fn offer_incoming(&mut self, pending: PendingIncoming) {
+        self.admissions.retain(|_, p| p.request.is_pending());
+        if self.stopping || !pending.request.is_pending() {
+            let _ = pending.request.reject();
+            return;
+        }
+        let id = pending.request.id;
+        let manual = pending.options.manual;
+        let offer = IncomingFax {
+            id,
+            caller: pending.request.caller.clone(),
+            destination: pending.request.destination.clone(),
+            peer: pending.request.peer.clone(),
+            arrived_at: pending.request.arrived.into(),
+        };
+        self.admissions.insert(id, pending);
+        if manual {
+            if self.incoming.try_send(offer).is_err() {
+                let _ = self.reject_incoming(id);
+            }
+        } else if let Err(error) = self.accept_incoming(id) {
+            self.error(error);
+        }
+    }
+    fn reject_incoming(&mut self, id: Uuid) -> Result<()> {
+        let pending = self
+            .admissions
+            .remove(&id)
+            .ok_or_else(|| Error::NotFound(id.to_string()))?;
+        if !pending.request.is_pending() {
+            return Err(Error::Invalid("Incoming offer expired".into()));
+        }
+        pending.request.reject().map_err(native_error)
+    }
+    fn accept_incoming(&mut self, id: Uuid) -> Result<ReceivedFax> {
+        let pending = self
+            .admissions
+            .remove(&id)
+            .ok_or_else(|| Error::NotFound(id.to_string()))?;
+        if !pending.request.is_pending() {
+            return Err(Error::Invalid("Incoming offer expired".into()));
+        }
+        let request = pending.request;
+        let result = self.reserve_incoming(
+            id,
+            pending.profile_id,
+            pending.profile_name,
+            pending.options,
+            request.caller.clone(),
+            request.arrived,
+            request.destination.clone(),
+            request.peer.clone(),
+        );
+        match result {
+            Ok(path) => {
+                if request.respond(Ok(path)).is_err() {
+                    let mut fax = self.store.received_fax(id)?;
+                    fax.outcome = ReceptionOutcome::Interrupted;
+                    fax.result = Some(ReceptionResult::Interrupted);
+                    fax.finished_at = Some(chrono::Utc::now());
+                    self.store.save_received(&fax)?;
+                    self.received_changed(fax);
+                    self.retry_export(id)?;
+                }
+                self.store.received_fax(id)
+            }
+            Err(error) => {
+                let _ = request.respond(Err(faxe_native::Error::Invalid(error.to_string())));
+                Err(error)
+            }
+        }
     }
     fn reserve_incoming(
         &mut self,
         id: Uuid,
-        profile_id: Uuid,
+        profile_id: Option<Uuid>,
         profile_name: String,
         options: ReceiveSettings,
         caller: String,
         arrived: std::time::SystemTime,
+        destination: String,
+        peer: String,
     ) -> Result<PathBuf> {
         if self.stopping {
             return Err(Error::WorkerStopped);
@@ -962,6 +1121,9 @@ impl Actor {
             profile_id,
             profile_name,
             caller,
+            destination,
+            peer,
+            tiff_path: Some(spool.join("fax.tiff")),
             arrived_at,
             filename_stem: arrived_at
                 .with_timezone(&chrono::Local)
@@ -1030,7 +1192,7 @@ impl Actor {
         result
     }
     fn start_send(&mut self) -> Result<()> {
-        if self.active.is_some()
+        if self.active.len() >= self.options.limits.outgoing
             || !self
                 .view
                 .jobs
@@ -1046,7 +1208,8 @@ impl Actor {
             return Ok(());
         };
         let cancellation = Cancellation::default();
-        self.active = Some((job.clone(), cancellation.clone()));
+        self.active
+            .insert(job.id, (job.clone(), cancellation.clone()));
         self.job_changed(job.clone());
         let credentials = self.credentials.clone();
         let path = self.documents.fax_path(job.request.document.id);
@@ -1164,7 +1327,7 @@ impl Actor {
             progress,
             TransmissionProgress::T38Activity { .. } | TransmissionProgress::PageProgress(_)
         );
-        let Some((job, _)) = self.active.as_mut().filter(|(job, _)| job.id == id) else {
+        let Some((job, _)) = self.active.get_mut(&id) else {
             return Ok(());
         };
         let previous = job.clone();
@@ -1204,9 +1367,10 @@ impl Actor {
                 if page.total_rows > 0
                     && page.rows <= page.total_rows
                     && job.page_progress.is_none_or(|old| {
-                        page.page > old.page || (page.page == old.page
-                            && page.rows as u64 * old.total_rows as u64
-                                >= old.rows as u64 * page.total_rows as u64)
+                        page.page > old.page
+                            || (page.page == old.page
+                                && page.rows as u64 * old.total_rows as u64
+                                    >= old.rows as u64 * page.total_rows as u64)
                     })
                 {
                     job.page_progress = Some(page);
@@ -1234,17 +1398,17 @@ impl Actor {
         if *job == previous {
             return Ok(());
         }
-        if !self.clear_active && !activity_only {
+        if !self.clear_active.contains(&id) && !activity_only {
             self.store.update_job(job)?;
         }
         let job = job.clone();
-        if !self.clear_active {
+        if !self.clear_active.contains(&id) {
             self.job_changed(job);
         }
         Ok(())
     }
     fn sent(&mut self, id: Uuid, outcome: Result<Receipt>) -> Result<()> {
-        let Some((mut job, _)) = self.active.take().filter(|(job, _)| job.id == id) else {
+        let Some((mut job, _)) = self.active.remove(&id) else {
             return Ok(());
         };
         let acknowledged_pages = job.state.acknowledged_pages();
@@ -1271,9 +1435,8 @@ impl Actor {
         if self.stopping && matches!(job.state, JobState::Cancelled { .. }) {
             job.state = JobState::Interrupted;
         }
-        if self.clear_active {
+        if self.clear_active.remove(&id) {
             self.store.remove_job(job.id)?;
-            self.clear_active = false;
         } else {
             self.store.update_job(&mut job)?;
             self.job_changed(job);
@@ -1428,7 +1591,7 @@ mod reception_effect_tests {
             .request(move |actor| {
                 actor.reserve_incoming(
                     id,
-                    Uuid::new_v4(),
+                    Some(Uuid::new_v4()),
                     "Fixture".into(),
                     ReceiveSettings {
                         notifications: false,
@@ -1436,6 +1599,8 @@ mod reception_effect_tests {
                     },
                     "Caller".into(),
                     std::time::SystemTime::now(),
+                    String::new(),
+                    String::new(),
                 )?;
                 let mut fax = actor.store.received_fax(id)?;
                 fax.outcome = ReceptionOutcome::Received;

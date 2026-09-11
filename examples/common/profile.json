@@ -1,0 +1,16 @@
+{
+  "id": "9e4a2a4b-4f96-4f27-b61d-4fcb1d607c3b",
+  "name": "Test SIP account",
+  "server": "127.0.0.1",
+  "port": 5060,
+  "transport": "Udp",
+  "username": "faxe",
+  "auth_username": null,
+  "register": false,
+  "outbound_proxy": null,
+  "station_id": "FAXE",
+  "sending_mode": "Auto",
+  "automatic_nat": false,
+  "stun_server": null,
+  "audio_playout_delay_ms": 200
+}

@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod document;
+mod options;
+pub use options::*;
 mod export;
 mod receive;
 pub use receive::*;

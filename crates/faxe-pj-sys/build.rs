@@ -26,13 +26,22 @@ fn main() {
     copy_source(&original, &source);
     fs::write(
         source.join("pjlib/include/pj/config_site.h"),
-        "#define PJ_HAS_SSL_SOCK 0\n#define PJMEDIA_HAS_VIDEO 0\n#define PJMEDIA_HAS_SRTP 0\n",
+        "#define PJ_HAS_SSL_SOCK 0\n#define PJMEDIA_HAS_VIDEO 0\n#define PJMEDIA_HAS_SRTP 0\n#define PJ_IOQUEUE_MAX_HANDLES 2048\n",
     )
     .unwrap();
     let build = out.join("build");
     let compiler = cc::Build::new().get_compiler();
     let cpp_compiler = cc::Build::new().cpp(true).get_compiler();
     let mut configure = Command::new("cmake");
+    match env::var("CARGO_CFG_TARGET_OS").unwrap().as_str() {
+        "linux" => {
+            configure.arg("-DPJLIB_WITH_IOQUEUE=epoll");
+        }
+        "macos" => {
+            configure.arg("-DPJLIB_WITH_IOQUEUE=kqueue");
+        }
+        _ => (),
+    }
     configure
         .args(["-S", &format!("{manifest}/native"), "-B"])
         .arg(&build)

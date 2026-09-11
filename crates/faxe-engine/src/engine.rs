@@ -107,6 +107,20 @@ impl Engine {
     pub fn documents(&self) -> Documents {
         self.0.handle().documents()
     }
+    pub fn open_with_options(
+        directory: PathBuf,
+        credentials: Arc<dyn Credentials>,
+        backend: Option<Arc<dyn FaxBackend>>,
+        options: crate::EngineOptions,
+    ) -> Result<Self> {
+        crate::EngineRuntime::open_with_options(directory, credentials, backend, options).map(Self)
+    }
+    pub fn handle(&self) -> crate::EngineHandle {
+        self.0.handle()
+    }
+    pub fn take_incoming(&mut self) -> Option<tokio::sync::mpsc::Receiver<crate::IncomingFax>> {
+        self.0.take_incoming()
+    }
     pub fn subscribe(&self) -> broadcast::Receiver<EngineEvent> {
         self.0.handle().subscribe()
     }

@@ -11,7 +11,15 @@ pub struct SipSender {
 }
 impl SipSender {
     pub fn new() -> Result<Self> {
-        let (service, events) = faxe_native::SipService::start()
+        Self::with_options(&crate::EngineOptions::default())
+    }
+    pub fn with_options(options: &crate::EngineOptions) -> Result<Self> {
+        options.validate()?;
+        let (service, events) =
+            faxe_native::SipService::start_with_options(faxe_native::ServiceOptions {
+                limits: options.limits,
+                admission_timeout: std::time::Duration::from_secs(options.admission_timeout_secs),
+            })
             .map_err(|error| Error::Transmission(error.to_string()))?;
         Ok(Self {
             service,

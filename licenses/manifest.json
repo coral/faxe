@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generator": "cargo-about 0.9.2 + scripts/generate-licenses.py",
-  "cargo_lock_sha256": "56d405437ca46ce80b10ae8d434bf86b6e4bd5e569d5a91451e39f719c85efc0",
+  "cargo_lock_sha256": "fd852b40a99e65f71861e6863e61d074f26383e2b9f10e76a975e6dcb1e5ce0c",
   "targets": [
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
@@ -757,6 +757,12 @@
     },
     {
       "name": "faxe-engine",
+      "version": "1.0.4",
+      "license": "GPL-3.0-only",
+      "repository": null
+    },
+    {
+      "name": "faxe-ffi",
       "version": "1.0.4",
       "license": "GPL-3.0-only",
       "repository": null
@@ -3392,6 +3398,7 @@
         "faxe-cli@1.0.4",
         "faxe-desktop@1.0.4",
         "faxe-engine@1.0.4",
+        "faxe-ffi@1.0.4",
         "faxe-native@1.0.4",
         "faxe-pj-sys@1.0.4"
       ],

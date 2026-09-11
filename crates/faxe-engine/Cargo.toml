@@ -32,5 +32,17 @@ flate2 = "1.1.10"
 tar = "0.4.46"
 
 [dev-dependencies]
+axum = { version = "0.8", features = ["multipart"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+tokio = { workspace = true, features = ["fs", "io-util"] }
+tower = { version = "0.5", features = ["util"] }
 udptl = "0.2.0"
 tracing-subscriber.workspace = true
+
+[[example]]
+name = "server"
+path = "../../examples/server.rs"
+
+[[example]]
+name = "receive"
+path = "../../examples/receive.rs"

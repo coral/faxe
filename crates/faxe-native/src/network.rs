@@ -127,6 +127,7 @@ pub(crate) struct AudioNetwork {
     timestamp: u32,
     ssrc: u32,
     source: Option<u32>,
+    source_change_pending: bool,
     playout: Playout,
     reported: ReceiveStats,
     last_report: Instant,
@@ -157,6 +158,7 @@ impl AudioNetwork {
             timestamp: u32::from_be_bytes(random[2..6].try_into().unwrap()),
             ssrc: u32::from_be_bytes(random[6..10].try_into().unwrap()),
             source: None,
+            source_change_pending: false,
             playout: Playout::new(playout_delay_ms)?,
             reported: ReceiveStats::default(),
             last_report: Instant::now(),
@@ -170,11 +172,17 @@ impl AudioNetwork {
             self.signaled_address = address;
             self.peer = Peer::new(address, self.symmetric);
             self.source = None;
+            self.source_change_pending = false;
             self.playout.reset_stream();
             self.last_received = Instant::now();
+        } else if codec != self.codec {
+            // A peer can restart RTP with a new SSRC when renegotiating the
+            // codec without changing its address/port. Select the stream on
+            // the first valid packet using the new codec from the accepted peer.
+            self.source_change_pending = true;
         }
         // Keep the fax modem and outgoing RTP clock running across re-INVITEs.
-        // Buffered samples are already decoded, so a codec change needs no reset.
+        // Retain decoded samples unless the peer actually replaces the SSRC.
         self.codec = codec;
     }
 
@@ -246,8 +254,17 @@ impl AudioNetwork {
                 continue;
             }
             if self.source.is_some_and(|source| source != packet.ssrc) {
-                continue;
+                if !self.source_change_pending {
+                    continue;
+                }
+                tracing::info!(
+                    previous_ssrc = self.source,
+                    ssrc = packet.ssrc,
+                    "RTP receive stream changed after codec renegotiation"
+                );
+                self.playout.reset_stream();
             }
+            self.source_change_pending = false;
             self.source = Some(packet.ssrc);
             self.playout
                 .insert(packet.timestamp, packet.payload, self.codec, Instant::now());
@@ -448,6 +465,65 @@ impl PacketNetwork {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn codec_renegotiation_accepts_a_new_ssrc_on_the_same_endpoint() -> Result<()> {
+        // The reported capture switches PCMA -> PCMU and SSRC at the same
+        // address/port. A restarted sender may also choose a new timestamp base.
+        for timestamp in [2_055_680_u32, 123] {
+            let local = UdpSocket::bind("127.0.0.1:0")?;
+            local.set_nonblocking(true)?;
+            let address = local.local_addr()?;
+            let socket = DatagramSocket::new(local)?;
+            let peer = UdpSocket::bind("127.0.0.1:0")?;
+            let other_peer = UdpSocket::bind("127.0.0.1:0")?;
+            let mut network =
+                AudioNetwork::new(&socket, peer.local_addr()?, G711::Pcma, false, None, 40)?;
+            let inject = |network: &mut AudioNetwork,
+                          sender: &UdpSocket,
+                          ssrc: u32,
+                          timestamp: u32,
+                          codec: G711|
+             -> Result<()> {
+                let mut packet = vec![0x80, codec.payload_type(), 0, 1];
+                packet.extend(timestamp.to_be_bytes());
+                packet.extend(ssrc.to_be_bytes());
+                packet.extend(codec.encode([1000; FRAME_SAMPLES]));
+                sender.send_to(&packet, address)?;
+                let deadline = Instant::now() + Duration::from_secs(1);
+                let mut buffer = [0; 2048];
+                while socket.peek_from(&mut buffer).is_err() {
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                network.receive_packets()
+            };
+            let old_ssrc = 0x2fa7_9dfa;
+            let new_ssrc = 0x1b83_8de4;
+            inject(&mut network, &peer, old_ssrc, 2_054_720, G711::Pcma)?;
+            network.update_remote(peer.local_addr()?, G711::Pcmu);
+            // Delayed old-codec packets and unrelated endpoints must not select
+            // the stream for the newly negotiated codec.
+            inject(&mut network, &peer, old_ssrc, 2_054_880, G711::Pcma)?;
+            inject(&mut network, &other_peer, 999, 0, G711::Pcmu)?;
+            network.last_received = Instant::now() - Duration::from_secs(31);
+            inject(&mut network, &peer, new_ssrc, timestamp, G711::Pcmu)?;
+            assert_eq!(network.source, Some(new_ssrc));
+            assert!(network.last_received.elapsed() < Duration::from_secs(1));
+            assert_eq!(
+                network.playout.drain(),
+                vec![G711::Pcmu.decode(G711::Pcmu.encode([1000; FRAME_SAMPLES]))],
+                "the new SSRC needs its own playout clock"
+            );
+            assert_eq!(network.playout.stats.missing_samples, 0);
+            assert_eq!(network.playout.stats.overflow_samples, 0);
+            // Once selected, keep rejecting unsolicited stream replacements.
+            inject(&mut network, &peer, old_ssrc, timestamp + 160, G711::Pcmu)?;
+            assert_eq!(network.source, Some(new_ssrc));
+            assert!(network.playout.drain().is_empty());
+        }
+        Ok(())
+    }
 
     #[test]
     fn audio_endpoint_update_preserves_tx_clock_and_accepts_a_new_rx_stream() -> Result<()> {

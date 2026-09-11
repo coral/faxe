@@ -11,6 +11,9 @@ pub type ProfileId = Uuid;
 #[serde(default)]
 pub struct ReceiveSettings {
     pub profile: Option<ProfileId>,
+    pub listener: Option<crate::ListenerConfig>,
+    /// Deliver offers through EngineRuntime::take_incoming instead of answering automatically.
+    pub manual: bool,
     pub folder: Option<PathBuf>,
     pub mode: FaxMode,
     pub ecm: bool,
@@ -20,6 +23,8 @@ impl Default for ReceiveSettings {
     fn default() -> Self {
         Self {
             profile: None,
+            listener: None,
+            manual: false,
             folder: None,
             mode: FaxMode::Auto,
             ecm: true,
@@ -29,6 +34,16 @@ impl Default for ReceiveSettings {
 }
 impl ReceiveSettings {
     pub fn validate(&self, profiles: &[SipProfile]) -> Result<()> {
+        if let Some(listener) = &self.listener {
+            listener
+                .validate()
+                .map_err(|e| Error::Invalid(e.to_string()))?;
+            if self.profile.is_some() {
+                return Err(Error::Invalid(
+                    "Choose a profile or a direct listener".into(),
+                ));
+            }
+        }
         if let Some(id) = self.profile {
             let profile = profiles
                 .iter()
@@ -40,6 +55,8 @@ impl ReceiveSettings {
                     "Enable SIP registration before enabling receiving".into(),
                 ));
             }
+        }
+        if self.profile.is_some() || self.listener.is_some() {
             if self.folder.as_ref().is_none_or(|path| !path.is_absolute()) {
                 return Err(Error::Invalid(
                     "Receive folder must be an absolute path".into(),
@@ -123,9 +140,15 @@ pub enum ReceptionResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReceivedFax {
     pub id: Uuid,
-    pub profile_id: ProfileId,
+    pub profile_id: Option<ProfileId>,
     pub profile_name: String,
     pub caller: String,
+    #[serde(default)]
+    pub destination: String,
+    #[serde(default)]
+    pub peer: String,
+    #[serde(default)]
+    pub tiff_path: Option<PathBuf>,
     pub arrived_at: DateTime<Utc>,
     /// Freeze local wall time at arrival, even if time zone changes before export.
     pub filename_stem: String,
@@ -142,4 +165,27 @@ pub struct ReceivedFax {
     pub export: ExportStatus,
     /// Old records predate the opt-in preservation policy.
     pub partial_page_preservation_available: bool,
+}
+
+/// An offer expires unless accepted or rejected using its engine handle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncomingFax {
+    pub id: Uuid,
+    pub caller: String,
+    pub destination: String,
+    pub peer: String,
+    pub arrived_at: DateTime<Utc>,
+}
+impl ReceivedFax {
+    /// Transfer and the first export attempt have both finished.
+    pub fn is_finished(&self) -> bool {
+        !self.outcome.is_active()
+            && matches!(
+                self.export,
+                ExportStatus::Published { .. }
+                    | ExportStatus::Failed { .. }
+                    | ExportStatus::NoContent
+                    | ExportStatus::Publishing { error: Some(_), .. }
+            )
+    }
 }

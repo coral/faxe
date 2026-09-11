@@ -104,3 +104,9 @@ Desktop.ini
 # licenses/ contains the generated inventory and reviewed source snapshots.
 # web/public/licenses.html is the generated website acknowledgments page.
 # Keep that entire directory, packaging assets, and example manifests in Git.
+
+# Server example data and locally built Go SDK.
+/faxe-server-data/
+/faxe-receive-data/
+/received-faxes/
+/bindings/go/native/

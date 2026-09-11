@@ -105,7 +105,7 @@ fn pending_admission_is_busy_times_out_and_rejects_a_late_success() -> TestResul
                 "slow" => {
                     assert!(!message.starts_with("SIP/2.0 200"));
                     provisional |= message.starts_with("SIP/2.0 100");
-                    rejected |= message.starts_with("SIP/2.0 500");
+                    rejected |= message.starts_with("SIP/2.0 480");
                 }
                 "busy" => busy |= message.starts_with("SIP/2.0 486"),
                 _ => (),

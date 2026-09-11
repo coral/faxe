@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/faxe-pj-sys", "crates/faxe-native", "crates/faxe-engine", "crates/faxe-cli"]
+members = [".", "crates/faxe-pj-sys", "crates/faxe-native", "crates/faxe-engine", "crates/faxe-cli", "crates/faxe-ffi"]
 default-members = ["."]
 resolver = "3"
 
@@ -25,6 +25,7 @@ edition.workspace = true
 license.workspace = true
 default-run = "faxe"
 description = "Send and receive faxes over SIP"
+autoexamples = false
 
 [package.metadata.bundle]
 name = "FAXE"

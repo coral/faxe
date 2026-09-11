@@ -21,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SignalingTransport {
     Udp,
     Tcp,
@@ -891,6 +891,16 @@ impl Sip {
         cancelled: &impl Fn() -> bool,
         prepared: Option<crate::tls::Prepared>,
     ) -> Result<Self> {
+        Self::new_bound(account, local, mode, cancelled, prepared, None)
+    }
+    fn new_bound(
+        account: &Account<'_>,
+        local: LocalMedia,
+        mode: Mode,
+        cancelled: &impl Fn() -> bool,
+        prepared: Option<crate::tls::Prepared>,
+        bind: Option<std::net::SocketAddr>,
+    ) -> Result<Self> {
         let endpoint = Endpoint::get()?;
         let id = NEXT_ID.with(|next| {
             let id = next.get();
@@ -919,12 +929,12 @@ impl Sip {
                 return Err(Error::Sip("Cannot allocate account pool".into()));
             }
             let mut address = pj::pj_sockaddr::default();
-            let ip = local.ip.to_string();
+            let ip = bind.map(|a| a.ip()).unwrap_or(local.ip).to_string();
             check(pj::pj_sockaddr_init(
                 pj::PJ_AF_INET as i32,
                 &mut address,
                 &pjstr(&ip),
-                0,
+                bind.map(|a| a.port()).unwrap_or(0),
             ))?;
             let (port, parameter) = match account.transport {
                 SignalingTransport::Udp => {

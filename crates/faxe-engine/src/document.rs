@@ -26,6 +26,7 @@ const MAX_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Clone, Default)]
 pub struct Cancellation {
+    notify: Arc<tokio::sync::Notify>,
     flag: Arc<AtomicBool>,
     wake: Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
 }
@@ -40,6 +41,7 @@ impl std::fmt::Debug for Cancellation {
 impl Cancellation {
     pub fn cancel(&self) {
         self.flag.store(true, Ordering::Release);
+        self.notify.notify_waiters();
         let wake = self.wake.lock().ok().and_then(|w| w.clone());
         if let Some(wake) = wake {
             wake();
@@ -48,6 +50,14 @@ impl Cancellation {
 
     pub fn is_cancelled(&self) -> bool {
         self.flag.load(Ordering::Acquire)
+    }
+    pub async fn cancelled(&self) {
+        let notified = self.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.is_cancelled() {
+            notified.await;
+        }
     }
 
     pub(crate) fn flag(&self) -> Arc<AtomicBool> {

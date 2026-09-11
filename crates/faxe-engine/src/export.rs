@@ -397,9 +397,12 @@ mod tests {
     fn record(folder: &Path) -> ReceivedFax {
         ReceivedFax {
             id: Uuid::new_v4(),
-            profile_id: Uuid::new_v4(),
+            profile_id: Some(Uuid::new_v4()),
             profile_name: "Fixture".into(),
             caller: "Local fixture".into(),
+            destination: String::new(),
+            peer: String::new(),
+            tiff_path: None,
             arrived_at: chrono::Utc::now(),
             filename_stem: "2026-09-07_12-00-00".into(),
             finished_at: Some(chrono::Utc::now()),

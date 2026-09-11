@@ -1,0 +1,18 @@
+[package]
+name = "faxe-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "faxe"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+faxe-engine = { path = "../faxe-engine" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -12,6 +12,74 @@ use std::{
 };
 use uuid::Uuid;
 
+/// Limits count connecting calls and pending admissions as well as active media.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct CallLimits {
+    pub outgoing: usize,
+    pub incoming: usize,
+}
+impl Default for CallLimits {
+    fn default() -> Self {
+        Self {
+            outgoing: 1,
+            incoming: 1,
+        }
+    }
+}
+impl CallLimits {
+    pub const SERVER: Self = Self {
+        outgoing: 100,
+        incoming: 100,
+    };
+    pub fn validate(self) -> Result<()> {
+        if self.outgoing == 0 || self.incoming == 0 {
+            return Err(Error::Invalid("Call limits must be positive".into()));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ServiceOptions {
+    pub limits: CallLimits,
+    pub admission_timeout: Duration,
+}
+impl Default for ServiceOptions {
+    fn default() -> Self {
+        Self {
+            limits: CallLimits::default(),
+            admission_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+/// Direct SIP listening, currently IPv4 UDP or TCP. Wildcard binds require an
+/// advertised address so neither Contact nor SDP contains an unspecified IP.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ListenerConfig {
+    pub bind: std::net::SocketAddr,
+    pub transport: SignalingTransport,
+    #[serde(default)]
+    pub advertised_ip: Option<std::net::IpAddr>,
+}
+impl ListenerConfig {
+    pub fn validate(&self) -> Result<()> {
+        let ip = self.advertised_ip.unwrap_or(self.bind.ip());
+        if !self.bind.is_ipv4()
+            || !ip.is_ipv4()
+            || ip.is_unspecified()
+            || self.transport == SignalingTransport::Tls
+        {
+            return Err(Error::Invalid(
+                "Direct listeners require IPv4 UDP/TCP and a concrete advertised IP (or bind IP)"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct ServiceAccount {
     pub id: Uuid,
@@ -63,6 +131,8 @@ pub struct ReceiveConfig {
 pub struct AdmissionRequest {
     pub id: Uuid,
     pub caller: String,
+    pub destination: String,
+    pub peer: String,
     pub arrived: SystemTime,
     pending: Arc<AtomicBool>,
     commands: Commands,
@@ -73,6 +143,9 @@ impl AdmissionRequest {
     }
     pub fn respond(self, result: Result<PathBuf>) -> Result<()> {
         self.commands.send(Command::Admit(self.id, result))
+    }
+    pub fn reject(self) -> Result<()> {
+        self.commands.send(Command::Reject(self.id))
     }
 }
 struct PendingAdmission {
@@ -110,10 +183,11 @@ pub enum SendUpdate {
     Finished(Result<TransferStats>),
 }
 enum Command {
-    Configure(Option<ReceiveConfig>),
+    Configure(Option<ReceiveConfig>, Option<ListenerConfig>),
     Send(ServiceSend, Arc<AtomicBool>, mpsc::Sender<SendUpdate>),
     CancelIncoming(Uuid),
     Admit(Uuid, Result<PathBuf>),
+    Reject(Uuid),
     Reconnect,
     Stop,
 }
@@ -139,7 +213,17 @@ struct ServiceOwner {
 pub struct SipService(Arc<ServiceOwner>);
 impl SipService {
     pub fn start() -> Result<(Self, mpsc::Receiver<ReceiveEvent>)> {
+        Self::start_with_options(ServiceOptions::default())
+    }
+    pub fn start_with_options(
+        options: ServiceOptions,
+    ) -> Result<(Self, mpsc::Receiver<ReceiveEvent>)> {
+        options.limits.validate()?;
+        if options.admission_timeout.is_zero() {
+            return Err(Error::Invalid("Admission timeout must be positive".into()));
+        }
         let (commands, receiver) = mpsc::unbounded();
+        let (ready, started) = mpsc::bounded(1);
         let (events, inbox) = mpsc::unbounded();
         let (wake, reader) = wake::Wake::pair()?;
         let commands = Commands {
@@ -152,15 +236,38 @@ impl SipService {
         let worker = thread::Builder::new()
             .name("faxe-sip".into())
             .spawn(move || {
+                let owner = match ENDPOINT_OWNER.try_lock() {
+                    Ok(owner) => owner,
+                    Err(_) => {
+                        let _ = ready.send(Err(
+                            "A native SIP engine is already running in this process".to_string(),
+                        ));
+                        return;
+                    }
+                };
                 #[cfg(test)]
                 crate::tls::tests::TRUST.with(|slot| *slot.borrow_mut() = trust);
-                if let Err(error) = service_loop(receiver, &events, worker_commands, reader) {
+                if let Err(error) =
+                    service_loop(receiver, &events, worker_commands, reader, options, ready)
+                {
                     let _ = events.send(ReceiveEvent::Status {
                         profile: None,
                         state: ReceiveState::Error(error.to_string()),
                     });
                 }
+                drop(owner);
             })?;
+        match started.recv() {
+            Ok(Ok(())) => (),
+            Ok(Err(error)) => {
+                let _ = worker.join();
+                return Err(Error::Sip(error));
+            }
+            Err(error) => {
+                let _ = worker.join();
+                return Err(Error::Sip(error.to_string()));
+            }
+        }
         Ok((
             Self(Arc::new(ServiceOwner {
                 commands,
@@ -173,7 +280,16 @@ impl SipService {
         if let Some(config) = &config {
             crate::validate_audio_playout_delay(config.account.audio_playout_delay_ms)?;
         }
-        self.command(Command::Configure(config))
+        self.command(Command::Configure(config, None))
+    }
+    pub fn configure_listener(
+        &self,
+        config: ReceiveConfig,
+        listener: ListenerConfig,
+    ) -> Result<()> {
+        listener.validate()?;
+        crate::validate_audio_playout_delay(config.account.audio_playout_delay_ms)?;
+        self.command(Command::Configure(Some(config), Some(listener)))
     }
     pub fn reconnect(&self) -> Result<()> {
         self.command(Command::Reconnect)
@@ -261,7 +377,7 @@ fn ensure_connection(
         connectors.remove(&account.id);
     }
     if !connectors.contains_key(&account.id) && workers.len() >= 2 {
-        return Err(Error::Sip("Connection setup is busy".into()));
+        return Ok(());
     }
     if let std::collections::hash_map::Entry::Vacant(entry) = connectors.entry(account.id) {
         let (send, result) = mpsc::unbounded();
@@ -336,6 +452,7 @@ fn ensure_connection(
     Ok(())
 }
 struct Connection {
+    listener: Option<ListenerConfig>,
     route_peer: std::net::SocketAddr,
     route_check: Instant,
     local_ip: std::net::IpAddr,
@@ -348,6 +465,38 @@ struct Connection {
     registration_peer: Option<pj::pj_sockaddr>,
 }
 impl Connection {
+    fn listening(account: ServiceAccount, listener: ListenerConfig) -> Result<Self> {
+        listener.validate()?;
+        let ip = listener.advertised_ip.unwrap_or(listener.bind.ip());
+        let local = LocalMedia {
+            ip,
+            audio_port: 0,
+            fax_port: 0,
+            session: 1,
+            version: 1,
+        };
+        let sip = Sip::new_bound(
+            &account.borrowed(),
+            local,
+            Mode::Auto,
+            &|| false,
+            None,
+            Some(listener.bind),
+        )?;
+        Ok(Self {
+            route_peer: listener.bind,
+            local_ip: ip,
+            listener: Some(listener),
+            route_check: Instant::now(),
+            stun: None,
+            sip,
+            account,
+            ready: true,
+            deadline: Instant::now(),
+            keepalive: Instant::now(),
+            registration_peer: None,
+        })
+    }
     fn new(account: ServiceAccount, prepared: PreparedConnection) -> Result<Self> {
         let local = LocalMedia {
             ip: prepared.local_ip,
@@ -367,6 +516,7 @@ impl Connection {
             sip.start_registration(&account.borrowed())?;
         }
         Ok(Self {
+            listener: None,
             route_peer: prepared.route_peer,
             route_check: Instant::now(),
             local_ip: prepared.local_ip,
@@ -380,7 +530,11 @@ impl Connection {
         })
     }
     fn next_deadline(&self) -> Instant {
-        let mut next = self.route_check + Duration::from_secs(5);
+        let mut next = if self.listener.is_some() {
+            Instant::now() + Duration::from_secs(86400)
+        } else {
+            self.route_check + Duration::from_secs(5)
+        };
         if !self.ready {
             next = next.min(self.deadline);
         }
@@ -396,7 +550,7 @@ impl Connection {
         next
     }
     fn poll(&mut self) -> Result<()> {
-        if self.route_check.elapsed() >= Duration::from_secs(5) {
+        if self.listener.is_none() && self.route_check.elapsed() >= Duration::from_secs(5) {
             let socket = UdpSocket::bind("0.0.0.0:0")?;
             socket.connect(self.route_peer)?;
             if socket.local_addr()?.ip() != self.local_ip {
@@ -617,22 +771,27 @@ impl ActiveCall {
     }
 }
 struct IncomingSlot {
+    direct: bool,
+    admission_timeout: Duration,
     sip: Sip,
     sockets: Sockets,
     config: ReceiveConfig,
 }
 thread_local! {
     static COMMANDS: RefCell<Option<Commands>> = const { RefCell::new(None) };
-    static AVAILABLE: RefCell<Option<IncomingSlot>> = const { RefCell::new(None) };
-    static ADMISSION: RefCell<Option<PendingAdmission>> = const { RefCell::new(None) };
-    static INCOMING_CALL_ID: RefCell<Option<String>> = const { RefCell::new(None) };
-    static BUSY: Cell<bool> = const { Cell::new(false) };
+    static AVAILABLE: RefCell<VecDeque<IncomingSlot>> = const { RefCell::new(VecDeque::new()) };
+    static ADMISSION: RefCell<HashMap<Uuid, PendingAdmission>> = RefCell::new(HashMap::new());
+    static INCOMING_CALL_IDS: RefCell<HashMap<Uuid, String>> = RefCell::new(HashMap::new());
+    static INCOMING_LIMIT: Cell<usize> = const { Cell::new(1) };
+}
+fn forget_incoming(id: Uuid) {
+    INCOMING_CALL_IDS.with(|ids| ids.borrow_mut().remove(&id));
 }
 
 pub(super) unsafe fn on_incoming(data: *mut pj::pjsip_rx_data) -> pj::pj_bool_t {
     unsafe {
         let call_id = string((*(*data).msg_info.cid).id);
-        if INCOMING_CALL_ID.with(|id| id.borrow().as_ref() == Some(&call_id)) {
+        if INCOMING_CALL_IDS.with(|ids| ids.borrow().values().any(|id| id == &call_id)) {
             return 0;
         }
         let endpoint = (*(*data).tp_info.transport).endpt;
@@ -646,11 +805,11 @@ pub(super) unsafe fn on_incoming(data: *mut pj::pjsip_rx_data) -> pj::pj_bool_t 
                 ptr::null(),
             );
         };
-        if BUSY.get() {
+        if INCOMING_CALL_IDS.with(|ids| ids.borrow().len()) >= INCOMING_LIMIT.get() {
             respond(486);
             return 1;
         }
-        let Some(mut slot) = AVAILABLE.with(|slot| slot.borrow_mut().take()) else {
+        let Some(mut slot) = AVAILABLE.with(|slot| slot.borrow_mut().pop_front()) else {
             respond(480);
             return 1;
         };
@@ -672,16 +831,17 @@ pub(super) unsafe fn on_incoming(data: *mut pj::pjsip_rx_data) -> pj::pj_bool_t 
             .split_once(':')
             .and_then(|(_, value)| value.split_once('@'))
             .map(|(user, _)| user);
-        if user != Some(slot.config.account.username.as_str()) {
-            AVAILABLE.with(|available| *available.borrow_mut() = Some(slot));
+        if !slot.direct && user != Some(slot.config.account.username.as_str()) {
+            AVAILABLE.with(|available| available.borrow_mut().push_front(slot));
             respond(404);
             return 1;
         }
         if slot.sockets.mapping_pending() {
-            AVAILABLE.with(|available| *available.borrow_mut() = Some(slot));
+            AVAILABLE.with(|available| available.borrow_mut().push_front(slot));
             respond(480);
             return 1;
         }
+        let admission_timeout = slot.admission_timeout;
         SELECTED.set(slot.sip.id);
         let result = (|| -> Result<(ActiveCall, AdmissionRequest, Arc<dyn Fn(AdmissionRequest) + Send + Sync>)> {
             let info = pj::pjsip_rdata_get_sdp_info(data);
@@ -766,7 +926,9 @@ pub(super) unsafe fn on_incoming(data: *mut pj::pjsip_rx_data) -> pj::pj_bool_t 
             };
             let pending=Arc::new(AtomicBool::new(true));
             let commands=COMMANDS.with(|slot|slot.borrow().clone()).ok_or_else(||Error::Sip("SIP service is stopping".into()))?;
-            let admission=AdmissionRequest { id,caller,arrived:SystemTime::now(),pending,commands };
+            let peer = std::ffi::CStr::from_ptr((*data).pkt_info.src_name.as_ptr()).to_string_lossy();
+            let peer = format!("{}:{}", peer, (*data).pkt_info.src_port);
+            let admission=AdmissionRequest { id,caller,destination:target,peer,arrived:SystemTime::now(),pending,commands };
             let offer=slot.config.offer;
             let file=PathBuf::new();
             let mut response = ptr::null_mut();
@@ -800,14 +962,16 @@ pub(super) unsafe fn on_incoming(data: *mut pj::pjsip_rx_data) -> pj::pj_bool_t 
         })();
         match result {
             Ok((call, request, offer)) => {
-                INCOMING_CALL_ID.with(|id| *id.borrow_mut() = Some(call_id));
-                BUSY.set(true);
+                INCOMING_CALL_IDS.with(|ids| ids.borrow_mut().insert(request.id, call_id));
                 ADMISSION.with(|slot| {
-                    *slot.borrow_mut() = Some(PendingAdmission {
-                        call,
-                        deadline: Instant::now() + Duration::from_secs(5),
-                        valid: request.pending.clone(),
-                    })
+                    slot.borrow_mut().insert(
+                        request.id,
+                        PendingAdmission {
+                            call,
+                            deadline: Instant::now() + admission_timeout,
+                            valid: request.pending.clone(),
+                        },
+                    )
                 });
                 offer(request);
             }
@@ -833,27 +997,108 @@ fn reject_admission(sip: &mut Sip, code: i32) {
     }
 }
 
+struct PendingSend {
+    fax: ServiceSend,
+    cancelled: Arc<AtomicBool>,
+    reply: mpsc::Sender<SendUpdate>,
+    media: Option<(Sockets, LocalMedia)>,
+}
+impl PendingSend {
+    fn prepare(
+        &mut self,
+        connections: &mut HashMap<Uuid, Connection>,
+        connectors: &mut HashMap<Uuid, Connector>,
+        wake: &wake::Wake,
+        workers: &mut Vec<thread::JoinHandle<()>>,
+    ) -> Result<Option<ActiveCall>> {
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+        ensure_connection(&self.fax.account, connections, connectors, wake, workers)?;
+        let Some(connection) = connections.get(&self.fax.account.id) else {
+            return Ok(None);
+        };
+        if connection.account != self.fax.account {
+            return Err(Error::Sip(
+                "Queued profile differs from the active account; requeue with the current profile"
+                    .into(),
+            ));
+        }
+        if !connection.ready {
+            return Ok(None);
+        }
+        if self.media.is_none() {
+            self.media = Some(media(
+                &self.fax.account,
+                connection.local_ip,
+                connection.stun,
+            )?);
+        }
+        let (sockets, _) = self.media.as_ref().unwrap();
+        sockets.poll_mappings()?;
+        if sockets.mapping_pending() {
+            return Ok(None);
+        }
+        let (sockets, local) = self.media.take().unwrap();
+        let mut sip = connection
+            .sip
+            .child(sockets.mapped_local(local), self.fax.mode)?;
+        sip.invite(
+            &SendRequest {
+                account: self.fax.account.borrowed(),
+                destination: &self.fax.destination,
+                file: &self.fax.file,
+                station_id: &self.fax.station_id,
+                mode: self.fax.mode,
+            },
+            if self.fax.mode == Mode::T38 {
+                Kind::T38
+            } else {
+                Kind::Audio
+            },
+        )?;
+        Ok(Some(ActiveCall {
+            sip,
+            sockets,
+            request: ServiceSend {
+                account: self.fax.account.clone(),
+                destination: self.fax.destination.clone(),
+                file: self.fax.file.clone(),
+                station_id: self.fax.station_id.clone(),
+                mode: self.fax.mode,
+            },
+            pump: CallPump::new(false, true),
+            cancelled: self.cancelled.clone(),
+            reply: Some(self.reply.clone()),
+            incoming: None,
+        }))
+    }
+    fn fail(self, error: Error) {
+        let _ = self.reply.send(SendUpdate::Finished(Err(error)));
+    }
+}
+
 fn service_loop(
     commands: mpsc::Receiver<Command>,
     events: &mpsc::Sender<ReceiveEvent>,
     command_sender: Commands,
     wake_reader: UdpSocket,
+    options: ServiceOptions,
+    ready: mpsc::Sender<std::result::Result<(), String>>,
 ) -> Result<()> {
-    let _owner = ENDPOINT_OWNER
-        .lock()
-        .map_err(|_| Error::Sip("Native owner poisoned".into()))?;
     let endpoint = Endpoint::get()?;
     let _wake = wake::Registration::new(endpoint.clone(), wake_reader)?;
     let wake = command_sender.wake.clone();
     let mut connector_workers = Vec::new();
     COMMANDS.with(|slot| *slot.borrow_mut() = Some(command_sender));
+    INCOMING_LIMIT.set(options.limits.incoming);
+    let _ = ready.send(Ok(()));
     let mut connections: HashMap<Uuid, Connection> = HashMap::new();
     let mut connectors = HashMap::new();
     let mut desired: Option<ReceiveConfig> = None;
-    let mut incoming: Option<ActiveCall> = None;
-    let mut outgoing: Option<ActiveCall> = None;
-    let mut pending = None;
-    let mut outgoing_media: Option<(Sockets, LocalMedia)> = None;
+    let mut listener: Option<ListenerConfig> = None;
+    let mut calls: HashMap<Uuid, ActiveCall> = HashMap::new();
+    let mut pending: VecDeque<PendingSend> = VecDeque::new();
     let mut retired: Vec<(Instant, Sip)> = Vec::new();
     let mut retry_at = Instant::now();
     let mut backoff = 1_u64;
@@ -866,97 +1111,102 @@ fn service_loop(
         loop {
             let woke = last_tick.elapsed() > Duration::from_secs(30);
             if woke {
-                for slot in [&mut incoming, &mut outgoing] {
-                    if let Some(call) = slot.take() {
-                        retired.push((
-                            Instant::now(),
-                            call.finish(
-                                Err(Error::Sip(
-                                    "Transfer interrupted while the computer was asleep".into(),
-                                )),
-                                events,
-                            ),
-                        ));
-                    }
+                for (id, call) in calls.drain() {
+                    forget_incoming(id);
+                    retired.push((
+                        Instant::now(),
+                        call.finish(
+                            Err(Error::Sip(
+                                "Transfer interrupted while the computer was asleep".into(),
+                            )),
+                            events,
+                        ),
+                    ));
                 }
-                INCOMING_CALL_ID.with(|id| id.borrow_mut().take());
+                ADMISSION.with(|admissions| {
+                    for (id, mut admission) in admissions.borrow_mut().drain() {
+                        admission.valid.store(false, Ordering::Release);
+                        reject_admission(&mut admission.call.sip, 480);
+                        forget_incoming(id);
+                        retired.push((Instant::now(), admission.call.sip));
+                    }
+                });
             }
             reconnect_requested |= woke;
             last_tick = Instant::now();
-            for command in next_command.take().into_iter().chain(commands.try_iter()) {
+            // A command burst must leave time for media and native socket polling.
+            for command in next_command
+                .take()
+                .into_iter()
+                .chain(commands.try_iter())
+                .take(64)
+            {
                 match command {
-                    Command::Configure(config) => {
+                    Command::Configure(config, direct) => {
                         desired = config;
-                        AVAILABLE.with(|slot| slot.borrow_mut().take());
-                        BUSY.set(
-                            incoming.is_some() || ADMISSION.with(|slot| slot.borrow().is_some()),
-                        );
+                        listener = direct;
+                        AVAILABLE.with(|slots| slots.borrow_mut().clear());
                         retry_at = Instant::now();
                         backoff = 1;
                     }
                     Command::CancelIncoming(id) => {
-                        if let Some(call) = &incoming
-                            && call.incoming == Some(id)
-                        {
+                        if let Some(call) = calls.get(&id) {
                             call.cancelled.store(true, Ordering::Release);
                         }
                     }
+                    Command::Reject(id) => {
+                        if let Some(mut admission) = ADMISSION.with(|a| a.borrow_mut().remove(&id))
+                        {
+                            admission.valid.store(false, Ordering::Release);
+                            reject_admission(&mut admission.call.sip, 603);
+                            forget_incoming(id);
+                            retired.push((Instant::now(), admission.call.sip));
+                        }
+                    }
                     Command::Admit(id, result) => {
-                        let pending = ADMISSION.with(|slot| {
-                            if slot
-                                .borrow()
-                                .as_ref()
-                                .is_some_and(|pending| pending.call.incoming == Some(id))
-                            {
-                                slot.borrow_mut().take()
-                            } else {
-                                None
-                            }
-                        });
-                        if let Some(mut pending) = pending {
-                            pending.valid.store(false, Ordering::Release);
+                        let admission = ADMISSION.with(|a| a.borrow_mut().remove(&id));
+                        if let Some(mut admission) = admission {
+                            admission.valid.store(false, Ordering::Release);
                             let persisted = result.is_ok();
                             let result = result.and_then(|path| {
-                                if Instant::now() >= pending.deadline
+                                if Instant::now() >= admission.deadline
                                     || unsafe {
-                                        (*pending.call.sip.inv).state
+                                        (*admission.call.sip.inv).state
                                             == pj::pjsip_inv_state_PJSIP_INV_STATE_DISCONNECTED
                                     }
                                 {
                                     return Err(Error::Cancelled);
                                 }
-                                pending.call.request.file = path;
+                                admission.call.request.file = path;
                                 let mut response = ptr::null_mut();
                                 unsafe {
                                     check(pj::pjsip_inv_answer(
-                                        pending.call.sip.inv,
+                                        admission.call.sip.inv,
                                         200,
                                         ptr::null(),
                                         ptr::null(),
                                         &mut response,
                                     ))?;
-                                    check(pj::pjsip_inv_send_msg(pending.call.sip.inv, response))
+                                    check(pj::pjsip_inv_send_msg(admission.call.sip.inv, response))
                                 }
                             });
                             match result {
                                 Ok(()) => {
-                                    BUSY.set(true);
-                                    incoming = Some(pending.call);
+                                    calls.insert(id, admission.call);
                                 }
                                 Err(error) => {
-                                    reject_admission(&mut pending.call.sip, 500);
+                                    reject_admission(&mut admission.call.sip, 500);
                                     let sip = if persisted {
-                                        pending.call.finish(Err(error), events)
+                                        admission.call.finish(Err(error), events)
                                     } else {
-                                        pending.call.sip
+                                        admission.call.sip
                                     };
+                                    forget_incoming(id);
                                     retired.push((Instant::now(), sip));
-                                    BUSY.set(false);
-                                    INCOMING_CALL_ID.with(|slot| slot.borrow_mut().take());
                                 }
                             }
                         } else if result.is_ok() {
-                            // Persistence completed after cancellation/timeout. Close that record.
+                            // Persistence raced a timeout/CANCEL; close the persisted record.
                             let _ = events.send(ReceiveEvent::Finished {
                                 id,
                                 outcome: Err(Error::Cancelled),
@@ -968,79 +1218,87 @@ fn service_loop(
                     Command::Reconnect => reconnect_requested = true,
                     Command::Stop => stopping = true,
                     Command::Send(fax, cancelled, reply) => {
-                        if outgoing.is_some() || pending.is_some() {
+                        let count =
+                            calls.values().filter(|c| c.incoming.is_none()).count() + pending.len();
+                        if count >= options.limits.outgoing {
                             let _ = reply.send(SendUpdate::Finished(Err(Error::Sip(
-                                "Outgoing fax already active".into(),
+                                "Outgoing call capacity reached".into(),
                             ))));
                         } else {
-                            pending = Some((fax, cancelled, reply));
+                            pending.push_back(PendingSend {
+                                fax,
+                                cancelled,
+                                reply,
+                                media: None,
+                            });
                         }
                     }
                 }
             }
-            if reconnect_requested
-                && incoming.is_none()
-                && outgoing.is_none()
-                && ADMISSION.with(|slot| slot.borrow().is_none())
+            if stopping {
+                break;
+            }
+            if reconnect_requested && calls.is_empty() && ADMISSION.with(|a| a.borrow().is_empty())
             {
                 reconnect_requested = false;
                 connectors.clear();
-                AVAILABLE.with(|slot| slot.borrow_mut().take());
-                for (_, connection) in connections.drain() {
+                AVAILABLE.with(|s| s.borrow_mut().clear());
+                for (_, mut connection) in connections.drain() {
+                    connection.sip.unregister();
                     retired.push((Instant::now(), connection.sip));
                 }
                 retry_at = Instant::now();
                 backoff = 1;
             }
-            if stopping {
-                break;
-            }
-            let mut failure = None;
-            for (&id, connection) in connections.iter_mut() {
-                if let Err(error) = connection.poll() {
-                    failure = Some((id, error.to_string()));
-                    break;
+            let failures: Vec<_> = connections
+                .iter_mut()
+                .filter_map(|(&id, c)| c.poll().err().map(|e| (id, e.to_string())))
+                .collect();
+            for (account_id, error) in failures {
+                let mut remaining = VecDeque::new();
+                for send in pending.drain(..) {
+                    if send.fax.account.id == account_id {
+                        send.fail(Error::Sip(error.clone()));
+                    } else {
+                        remaining.push_back(send);
+                    }
                 }
-            }
-            if let Some((id, error)) = failure {
-                if pending.as_ref().is_some_and(
-                    |(fax, _, _): &(ServiceSend, Arc<AtomicBool>, mpsc::Sender<SendUpdate>)| {
-                        fax.account.id == id
-                    },
-                ) && let Some((_, _, reply)) = pending.take()
-                {
-                    outgoing_media.take();
-                    let _ = reply.send(SendUpdate::Finished(Err(Error::Sip(error.clone()))));
+                pending = remaining;
+                let affected: Vec<_> = calls
+                    .iter()
+                    .filter(|(_, c)| c.request.account.id == account_id)
+                    .map(|(&id, _)| id)
+                    .collect();
+                for id in affected {
+                    forget_incoming(id);
+                    retired.push((
+                        Instant::now(),
+                        calls
+                            .remove(&id)
+                            .unwrap()
+                            .finish(Err(Error::Sip(error.clone())), events),
+                    ));
                 }
-                if let Some(connection) = connections.remove(&id) {
+                ADMISSION.with(|a| {
+                    let ids: Vec<_> = a
+                        .borrow()
+                        .iter()
+                        .filter(|(_, p)| p.call.request.account.id == account_id)
+                        .map(|(&id, _)| id)
+                        .collect();
+                    for id in ids {
+                        let mut p = a.borrow_mut().remove(&id).unwrap();
+                        p.valid.store(false, Ordering::Release);
+                        reject_admission(&mut p.call.sip, 480);
+                        forget_incoming(id);
+                        retired.push((Instant::now(), p.call.sip));
+                    }
+                });
+                if let Some(connection) = connections.remove(&account_id) {
                     retired.push((Instant::now(), connection.sip));
                 }
-                if let Some(call) = incoming.take() {
-                    if call.request.account.id == id {
-                        retired.push((
-                            Instant::now(),
-                            call.finish(Err(Error::Sip(error.clone())), events),
-                        ));
-                        INCOMING_CALL_ID.with(|id| id.borrow_mut().take());
-                    } else {
-                        incoming = Some(call);
-                    }
-                }
-                if let Some(call) = outgoing.take() {
-                    if call.request.account.id == id {
-                        retired.push((
-                            Instant::now(),
-                            call.finish(Err(Error::Sip(error.clone())), events),
-                        ));
-                    } else {
-                        outgoing = Some(call);
-                    }
-                }
-                if desired
-                    .as_ref()
-                    .is_some_and(|config| config.account.id == id)
-                {
-                    AVAILABLE.with(|slot| slot.borrow_mut().take());
+                if desired.as_ref().is_some_and(|c| c.account.id == account_id) {
+                    AVAILABLE.with(|s| s.borrow_mut().clear());
                     retry_at = Instant::now()
                         + Duration::from_secs(
                             if error.contains("401")
@@ -1053,255 +1311,236 @@ fn service_loop(
                             },
                         );
                     backoff = (backoff * 2).min(60);
-                    let status = (Some(id), ReceiveState::Error(error));
-                    let _ = events.send(ReceiveEvent::Status {
-                        profile: status.0,
-                        state: status.1.clone(),
-                    });
-                    last_status = Some(status);
+                    last_status = Some((
+                        if listener.is_some() {
+                            None
+                        } else {
+                            Some(account_id)
+                        },
+                        ReceiveState::Error(error),
+                    ));
+                    let (profile, state) = last_status.clone().unwrap();
+                    let _ = events.send(ReceiveEvent::Status { profile, state });
                 }
             }
-            if incoming.is_none()
-                && ADMISSION.with(|slot| slot.borrow().is_none())
-                && let Some(config) = &desired
+            if let Some(config) = &desired
                 && Instant::now() >= retry_at
+                && !calls
+                    .values()
+                    .any(|c| c.incoming.is_some() && c.request.account.id != config.account.id)
+                && !ADMISSION.with(|a| {
+                    a.borrow()
+                        .values()
+                        .any(|p| p.call.request.account.id != config.account.id)
+                })
             {
-                if connections
+                let held = calls
+                    .values()
+                    .any(|c| c.request.account.id == config.account.id)
+                    || ADMISSION.with(|a| {
+                        a.borrow()
+                            .values()
+                            .any(|p| p.call.request.account.id == config.account.id)
+                    });
+                let changed = connections
                     .get(&config.account.id)
-                    .is_some_and(|c| c.account != config.account)
-                {
-                    AVAILABLE.with(|slot| slot.borrow_mut().take());
-                    if let Some(mut connection) = connections.remove(&config.account.id) {
-                        connection.sip.unregister();
-                        retired.push((Instant::now(), connection.sip));
+                    .is_some_and(|c| c.account != config.account || c.listener != listener);
+                if changed && !held {
+                    AVAILABLE.with(|s| s.borrow_mut().clear());
+                    if let Some(mut c) = connections.remove(&config.account.id) {
+                        c.sip.unregister();
+                        retired.push((Instant::now(), c.sip));
                     }
                 }
-                if let Err(error) = ensure_connection(
-                    &config.account,
-                    &mut connections,
-                    &mut connectors,
-                    &wake,
-                    &mut connector_workers,
-                ) {
+                let connection_result = if changed && held {
+                    Ok(())
+                } else if let Some(direct) = &listener {
+                    if connections.contains_key(&config.account.id) {
+                        Ok(())
+                    } else {
+                        Connection::listening(config.account.clone(), direct.clone()).map(|c| {
+                            connections.insert(config.account.id, c);
+                        })
+                    }
+                } else {
+                    ensure_connection(
+                        &config.account,
+                        &mut connections,
+                        &mut connectors,
+                        &wake,
+                        &mut connector_workers,
+                    )
+                };
+                if let Err(error) = connection_result {
+                    let error = error.to_string();
                     retry_at = Instant::now()
-                        + Duration::from_secs(if error.to_string().contains("certificate") {
+                        + Duration::from_secs(if error.contains("certificate") {
                             86400
                         } else {
                             backoff
                         });
                     backoff = (backoff * 2).min(60);
-                    let status = (
-                        Some(config.account.id),
-                        ReceiveState::Error(error.to_string()),
-                    );
+                    let profile = if listener.is_some() {
+                        None
+                    } else {
+                        Some(config.account.id)
+                    };
+                    last_status = Some((profile, ReceiveState::Error(error.clone())));
                     let _ = events.send(ReceiveEvent::Status {
-                        profile: status.0,
-                        state: status.1.clone(),
+                        profile,
+                        state: ReceiveState::Error(error),
                     });
-                    last_status = Some(status);
                 }
                 if let Some(connection) = connections.get(&config.account.id)
                     && connection.ready
-                    && AVAILABLE.with(|slot| slot.borrow().is_none())
+                    && connection.account == config.account
+                    && connection.listener == listener
                 {
-                    let (sockets, local) =
-                        media(&config.account, connection.local_ip, connection.stun)?;
-                    let sip = connection.sip.child(local, config.mode)?;
-                    AVAILABLE.with(|slot| {
-                        *slot.borrow_mut() = Some(IncomingSlot {
-                            sip,
-                            sockets,
-                            config: config.clone(),
-                        })
-                    });
-                    BUSY.set(false);
+                    let occupied = INCOMING_CALL_IDS.with(|ids| ids.borrow().len());
+                    let available = AVAILABLE.with(|s| s.borrow().len());
+                    for _ in occupied + available..options.limits.incoming {
+                        let bind_ip = listener
+                            .as_ref()
+                            .map(|l| l.bind.ip())
+                            .unwrap_or(connection.local_ip);
+                        let (sockets, mut local) =
+                            media(&config.account, bind_ip, connection.stun)?;
+                        local.ip = connection.local_ip;
+                        let sip = connection.sip.child(local, config.mode)?;
+                        AVAILABLE.with(|s| {
+                            s.borrow_mut().push_back(IncomingSlot {
+                                direct: listener.is_some(),
+                                admission_timeout: options.admission_timeout,
+                                sip,
+                                sockets,
+                                config: config.clone(),
+                            })
+                        });
+                    }
                     backoff = 1;
                 }
             }
-            if let Some((fax, cancelled, reply)) = pending.take() {
-                let preparation = (|| -> Result<Option<ActiveCall>> {
-                    if cancelled.load(Ordering::Acquire) {
-                        return Err(Error::Cancelled);
+            let mut waiting = VecDeque::new();
+            for mut send in pending.drain(..) {
+                match send.prepare(
+                    &mut connections,
+                    &mut connectors,
+                    &wake,
+                    &mut connector_workers,
+                ) {
+                    Ok(Some(call)) => {
+                        calls.insert(Uuid::new_v4(), call);
                     }
-                    ensure_connection(
-                        &fax.account,
-                        &mut connections,
-                        &mut connectors,
-                        &wake,
-                        &mut connector_workers,
-                    )?;
-                    let Some(connection) = connections.get(&fax.account.id) else {
-                        return Ok(None);
-                    };
-                    if connection.account != fax.account {
-                        return Err(Error::Sip("Queued profile differs from the active account; requeue with the current profile".into()));
-                    }
-                    if !connection.ready {
-                        return Ok(None);
-                    }
-                    if outgoing_media.is_none() {
-                        outgoing_media =
-                            Some(media(&fax.account, connection.local_ip, connection.stun)?);
-                    }
-                    let (sockets, _) = outgoing_media.as_ref().unwrap();
-                    sockets.poll_mappings()?;
-                    if sockets.mapping_pending() {
-                        return Ok(None);
-                    }
-                    let (sockets, local) = outgoing_media.take().unwrap();
-                    let local = sockets.mapped_local(local);
-                    let mut sip = connection.sip.child(local, fax.mode)?;
-                    sip.invite(
-                        &SendRequest {
-                            account: fax.account.borrowed(),
-                            destination: &fax.destination,
-                            file: &fax.file,
-                            station_id: &fax.station_id,
-                            mode: fax.mode,
-                        },
-                        if fax.mode == Mode::T38 {
-                            Kind::T38
-                        } else {
-                            Kind::Audio
-                        },
-                    )?;
-                    Ok(Some(ActiveCall {
-                        sip,
-                        sockets,
-                        request: ServiceSend {
-                            account: fax.account.clone(),
-                            destination: fax.destination.clone(),
-                            file: fax.file.clone(),
-                            station_id: fax.station_id.clone(),
-                            mode: fax.mode,
-                        },
-                        pump: CallPump::new(false, true),
-                        cancelled: cancelled.clone(),
-                        reply: Some(reply.clone()),
-                        incoming: None,
-                    }))
-                })();
-                match preparation {
-                    Ok(Some(call)) => outgoing = Some(call),
-                    Ok(None) => pending = Some((fax, cancelled, reply)),
-                    Err(error) => {
-                        outgoing_media.take();
-                        let _ = reply.send(SendUpdate::Finished(Err(error)));
-                    }
+                    Ok(None) => waiting.push_back(send),
+                    Err(error) => send.fail(error),
                 }
             }
-            AVAILABLE.with(|slot| -> Result<()> {
-                if let Some(slot) = slot.borrow().as_ref() {
+            pending = waiting;
+            AVAILABLE.with(|slots| -> Result<()> {
+                for slot in slots.borrow().iter() {
                     slot.sockets.poll_mappings()?;
                     CALLBACKS.with(|callbacks| {
-                        if let Some(callbacks) = callbacks.borrow_mut().get_mut(&slot.sip.id) {
-                            callbacks.local = slot.sockets.mapped_local(callbacks.local.clone());
+                        if let Some(c) = callbacks.borrow_mut().get_mut(&slot.sip.id) {
+                            c.local = slot.sockets.mapped_local(c.local.clone());
                         }
                     });
                 }
                 Ok(())
             })?;
-            let expired = ADMISSION.with(|slot| {
-                slot.borrow().as_ref().is_some_and(|pending| {
-                    Instant::now() >= pending.deadline
-                        || unsafe {
-                            (*pending.call.sip.inv).state
-                                == pj::pjsip_inv_state_PJSIP_INV_STATE_DISCONNECTED
-                        }
-                })
+            ADMISSION.with(|a| {
+                let expired: Vec<_> = a
+                    .borrow()
+                    .iter()
+                    .filter(|(_, p)| {
+                        Instant::now() >= p.deadline
+                            || unsafe {
+                                (*p.call.sip.inv).state
+                                    == pj::pjsip_inv_state_PJSIP_INV_STATE_DISCONNECTED
+                            }
+                    })
+                    .map(|(&id, _)| id)
+                    .collect();
+                for id in expired {
+                    let mut p = a.borrow_mut().remove(&id).unwrap();
+                    p.valid.store(false, Ordering::Release);
+                    reject_admission(&mut p.call.sip, 480);
+                    forget_incoming(id);
+                    retired.push((Instant::now(), p.call.sip));
+                }
             });
-            if expired && let Some(mut pending) = ADMISSION.with(|slot| slot.borrow_mut().take()) {
-                pending.valid.store(false, Ordering::Release);
-                reject_admission(&mut pending.call.sip, 500);
-                retired.push((Instant::now(), pending.call.sip));
-                BUSY.set(false);
-                INCOMING_CALL_ID.with(|slot| slot.borrow_mut().take());
-            }
-            for call_slot in [&mut incoming, &mut outgoing] {
-                if let Some(call) = call_slot.as_mut() {
-                    let result = call.tick(events);
-                    if !matches!(result, Ok(None)) {
-                        let was_incoming = call.incoming.is_some();
-                        let call = call_slot.take().unwrap();
-                        retired.push((
-                            Instant::now(),
-                            call.finish(result.map(|stats| stats.unwrap()), events),
-                        ));
-                        if was_incoming {
-                            INCOMING_CALL_ID.with(|id| id.borrow_mut().take());
-                            BUSY.set(false);
-                        }
-                    }
+            let mut finished = Vec::new();
+            for (&id, call) in &mut calls {
+                match call.tick(events) {
+                    Ok(None) => (),
+                    result => finished.push((id, result.map(|s| s.unwrap()))),
                 }
             }
-            // A finished or expired call makes the listener immediately runnable.
-            if incoming.is_none()
-                && ADMISSION.with(|slot| slot.borrow().is_none())
-                && AVAILABLE.with(|slot| slot.borrow().is_none())
-                && desired.as_ref().is_some_and(|config| {
-                    connections.get(&config.account.id).is_some_and(|c| c.ready)
-                })
-                && Instant::now() >= retry_at
-            {
-                continue;
+            for (id, result) in finished {
+                forget_incoming(id);
+                retired.push((
+                    Instant::now(),
+                    calls.remove(&id).unwrap().finish(result, events),
+                ));
             }
             let profile = desired.as_ref().map(|c| c.account.id);
-            let status_profile = incoming
-                .as_ref()
-                .map(|call| call.request.account.id)
-                .or(profile);
-            let status = if incoming.is_some() {
+            let active_profile = calls
+                .values()
+                .find(|c| c.incoming.is_some())
+                .map(|c| c.request.account.id)
+                .or_else(|| {
+                    ADMISSION.with(|a| {
+                        a.borrow()
+                            .values()
+                            .next()
+                            .map(|p| p.call.request.account.id)
+                    })
+                });
+            let status_profile = active_profile.or(profile).filter(|id| !id.is_nil());
+            let receiving = INCOMING_CALL_IDS.with(|ids| !ids.borrow().is_empty());
+            let available =
+                AVAILABLE.with(|s| s.borrow().iter().any(|s| !s.sockets.mapping_pending()));
+            let state = if receiving {
                 ReceiveState::Receiving
             } else if desired.is_none() {
                 ReceiveState::Off
             } else if Instant::now() < retry_at {
                 last_status
                     .as_ref()
-                    .map(|s| s.1.clone())
+                    .map(|(_, s)| s.clone())
                     .unwrap_or(ReceiveState::Registering)
-            } else if AVAILABLE.with(|slot| {
-                slot.borrow()
-                    .as_ref()
-                    .is_some_and(|slot| !slot.sockets.mapping_pending())
-            }) {
+            } else if available {
                 ReceiveState::Ready
             } else {
                 ReceiveState::Registering
             };
-            if last_status.as_ref() != Some(&(status_profile, status.clone())) {
+            if last_status.as_ref() != Some(&(status_profile, state.clone())) {
                 let _ = events.send(ReceiveEvent::Status {
                     profile: status_profile,
-                    state: status.clone(),
+                    state: state.clone(),
                 });
-                last_status = Some((status_profile, status));
+                last_status = Some((status_profile, state));
             }
             connectors.retain(|id, _| {
-                Some(*id) == profile
-                    || pending
-                        .as_ref()
-                        .is_some_and(|(fax, _, _)| fax.account.id == *id)
+                Some(*id) == profile || pending.iter().any(|p| p.fax.account.id == *id)
             });
-            // Keep the selected registration and both active call accounts; release others.
             let unused: Vec<_> = connections
                 .keys()
                 .copied()
                 .filter(|id| {
                     Some(*id) != profile
-                        && incoming
-                            .as_ref()
-                            .is_none_or(|c| c.request.account.id != *id)
-                        && outgoing
-                            .as_ref()
-                            .is_none_or(|c| c.request.account.id != *id)
-                        && pending
-                            .as_ref()
-                            .is_none_or(|(fax, _, _)| fax.account.id != *id)
+                        && !calls.values().any(|c| c.request.account.id == *id)
+                        && !pending.iter().any(|p| p.fax.account.id == *id)
+                        && !ADMISSION.with(|a| {
+                            a.borrow()
+                                .values()
+                                .any(|p| p.call.request.account.id == *id)
+                        })
                 })
                 .collect();
             for id in unused {
-                if let Some(mut connection) = connections.remove(&id) {
-                    connection.sip.unregister();
-                    retired.push((Instant::now(), connection.sip));
+                if let Some(mut c) = connections.remove(&id) {
+                    c.sip.unregister();
+                    retired.push((Instant::now(), c.sip));
                 }
             }
             for (_, sip) in &retired {
@@ -1310,52 +1549,45 @@ fn service_loop(
                 }
             }
             retired.retain(|(at, _)| at.elapsed() < Duration::from_secs(2));
-            endpoint
-                .tls_owners
-                .borrow_mut()
-                .retain(|transport| !transport.destroyed());
+            endpoint.tls_owners.borrow_mut().retain(|t| !t.destroyed());
             if desired.is_none()
-                && pending.is_none()
-                && incoming.is_none()
-                && outgoing.is_none()
+                && pending.is_empty()
+                && calls.is_empty()
                 && connections.is_empty()
                 && connectors.is_empty()
                 && retired.is_empty()
-                && ADMISSION.with(|slot| slot.borrow().is_none())
+                && ADMISSION.with(|a| a.borrow().is_empty())
             {
-                // No signaling or media remains: sleep until a command arrives.
-                // recv also wakes for Stop, so shutdown does not need a timer.
                 match commands.recv() {
-                    Ok(command) => next_command = Some(command),
+                    Ok(c) => next_command = Some(c),
                     Err(_) => break,
                 }
-                // A deliberate idle wait is not a system-sleep interruption.
                 last_tick = Instant::now();
                 continue;
             }
-            // PJPROJECT already accounts for its own retransmission/registration timers.
-            // Only application protocol deadlines constrain the socket wait.
             let mut deadline = connections.values().map(Connection::next_deadline).min();
             let mut due = |at: Option<Instant>| {
                 if let Some(at) = at {
                     deadline = Some(deadline.map_or(at, |old| old.min(at)));
                 }
             };
-            for call in [&incoming, &outgoing].into_iter().flatten() {
+            for call in calls.values() {
                 due(Some(call.pump.next_frame));
                 due(call.sockets.next_deadline());
             }
-            if let Some((sockets, _)) = &outgoing_media {
-                due(sockets.next_deadline());
+            for send in &pending {
+                if let Some((s, _)) = &send.media {
+                    due(s.next_deadline());
+                }
             }
-            AVAILABLE.with(|slot| {
-                if let Some(slot) = slot.borrow().as_ref() {
-                    due(slot.sockets.next_deadline());
+            AVAILABLE.with(|s| {
+                for s in s.borrow().iter() {
+                    due(s.sockets.next_deadline());
                 }
             });
-            ADMISSION.with(|slot| {
-                if let Some(slot) = slot.borrow().as_ref() {
-                    due(Some(slot.deadline));
+            ADMISSION.with(|a| {
+                for p in a.borrow().values() {
+                    due(Some(p.deadline));
                 }
             });
             for (at, sip) in &retired {
@@ -1367,38 +1599,50 @@ fn service_loop(
             if desired.is_some() && retry_at > Instant::now() {
                 due(Some(retry_at));
             }
-            // Darwin rejects select timeouts near PJ's INT_MAX "no timer" value.
-            // This ceiling is only a portability guard; the doorbell wakes commands.
-            let timeout = deadline.map(|at| {
-                let remaining = at.saturating_duration_since(Instant::now());
-                let millis =
-                    remaining.as_millis() + u128::from(remaining.subsec_nanos() % 1_000_000 != 0);
-                pj::pj_time_val {
-                    sec: (millis / 1000) as _,
-                    msec: (millis % 1000) as _,
-                }
-            });
+            // Refill a released incoming slot before sleeping for the next INVITE.
+            if let Some(config) = &desired
+                && Instant::now() >= retry_at
+                && connections.get(&config.account.id).is_some_and(|c| {
+                    c.ready && c.account == config.account && c.listener == listener
+                })
+                && INCOMING_CALL_IDS.with(|i| i.borrow().len())
+                    + AVAILABLE.with(|s| s.borrow().len())
+                    < options.limits.incoming
+            {
+                due(Some(Instant::now()));
+            }
+            if !commands.is_empty() {
+                due(Some(Instant::now()));
+            }
+            let millis = deadline
+                .map(|d| {
+                    d.saturating_duration_since(Instant::now())
+                        .as_millis()
+                        .saturating_add(1)
+                })
+                .unwrap_or(86400000);
             unsafe {
                 check(pj::pjsip_endpt_handle_events(
                     endpoint.endpt,
-                    timeout.as_ref().unwrap_or(&pj::pj_time_val {
-                        sec: 86400,
-                        msec: 0,
-                    }),
+                    &pj::pj_time_val {
+                        sec: (millis / 1000) as _,
+                        msec: (millis % 1000) as _,
+                    },
                 ))?;
             }
         }
         Ok(())
     })();
     connectors.clear();
-    if let Some(mut pending) = ADMISSION.with(|slot| slot.borrow_mut().take()) {
-        pending.valid.store(false, Ordering::Release);
-        reject_admission(&mut pending.call.sip, 480);
-        retired.push((Instant::now(), pending.call.sip));
-    }
-    AVAILABLE.with(|slot| slot.borrow_mut().take());
-    BUSY.set(true);
-    for call in [incoming, outgoing].into_iter().flatten() {
+    ADMISSION.with(|a| {
+        for (_, mut p) in a.borrow_mut().drain() {
+            p.valid.store(false, Ordering::Release);
+            reject_admission(&mut p.call.sip, 480);
+            retired.push((Instant::now(), p.call.sip));
+        }
+    });
+    AVAILABLE.with(|s| s.borrow_mut().clear());
+    for (_, call) in calls {
         retired.push((
             Instant::now(),
             call.finish(
@@ -1410,12 +1654,17 @@ fn service_loop(
             ),
         ));
     }
-    if let Some((_, _, reply)) = pending {
-        let _ = reply.send(SendUpdate::Finished(Err(Error::Cancelled)));
+    for send in pending {
+        send.fail(Error::Cancelled);
     }
-    for (_, mut connection) in connections {
-        connection.sip.unregister();
-        retired.push((Instant::now(), connection.sip));
+    for command in commands.try_iter() {
+        if let Command::Send(_, _, reply) = command {
+            let _ = reply.send(SendUpdate::Finished(Err(Error::Cancelled)));
+        }
+    }
+    for (_, mut c) in connections {
+        c.sip.unregister();
+        retired.push((Instant::now(), c.sip));
     }
     let deadline = Instant::now() + Duration::from_secs(2);
     while !retired.is_empty() && Instant::now() < deadline {
@@ -1425,18 +1674,12 @@ fn service_loop(
             }
         }
         unsafe {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            pj::pjsip_endpt_handle_events(
-                endpoint.endpt,
-                &pj::pj_time_val {
-                    sec: remaining.as_secs() as _,
-                    msec: remaining.subsec_millis() as _,
-                },
-            );
+            pj::pjsip_endpt_handle_events(endpoint.endpt, &pj::pj_time_val { sec: 0, msec: 20 });
         }
+        retired.retain(|(at, _)| at.elapsed() < Duration::from_secs(2));
     }
-    INCOMING_CALL_ID.with(|id| id.borrow_mut().take());
-    COMMANDS.with(|slot| slot.borrow_mut().take());
+    INCOMING_CALL_IDS.with(|ids| ids.borrow_mut().clear());
+    COMMANDS.with(|s| s.borrow_mut().take());
     for worker in connector_workers {
         let _ = worker.join();
     }
